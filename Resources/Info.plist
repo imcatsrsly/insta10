@@ -13,13 +13,28 @@
     };
   };
   CFBundlePackageType = APPL;
-  CFBundleShortVersionString = "0.1.1";
-  CFBundleVersion = "2";
+  CFBundleShortVersionString = "0.1.2";
+  CFBundleVersion = "3";
   LSRequiresIPhoneOS = 1;
   MinimumOSVersion = "10.0";
   UIDeviceFamily = (1);
-  UIRequiredDeviceCapabilities = (armv7);
+  UIRequiredDeviceCapabilities = (arm64);
+  CFBundleSupportedPlatforms = (iPhoneOS);
   UISupportedInterfaceOrientations = (UIInterfaceOrientationPortrait);
   UIStatusBarStyle = UIStatusBarStyleDefault;
   UIViewControllerBasedStatusBarAppearance = 1;
+  UILaunchImages = (
+    {
+      UILaunchImageMinimumOSVersion = "8.0";
+      UILaunchImageName = "Default";
+      UILaunchImageOrientation = Portrait;
+      UILaunchImageSize = "{320, 480}";
+    },
+    {
+      UILaunchImageMinimumOSVersion = "8.0";
+      UILaunchImageName = "Default-568h";
+      UILaunchImageOrientation = Portrait;
+      UILaunchImageSize = "{320, 568}";
+    }
+  );
 }
