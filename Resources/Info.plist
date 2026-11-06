@@ -1,0 +1,25 @@
+{
+  CFBundleDevelopmentRegion = en;
+  CFBundleDisplayName = Insta10;
+  CFBundleExecutable = Insta10;
+  CFBundleIdentifier = com.imcatsrsly.insta10;
+  CFBundleInfoDictionaryVersion = "6.0";
+  CFBundleName = Insta10;
+  CFBundleIconFiles = ("Icon-60.png", "Icon-60@2x.png");
+  CFBundleIcons = {
+    CFBundlePrimaryIcon = {
+      CFBundleIconFiles = ("Icon-60.png", "Icon-60@2x.png");
+      UIPrerenderedIcon = 1;
+    };
+  };
+  CFBundlePackageType = APPL;
+  CFBundleShortVersionString = "0.1.1";
+  CFBundleVersion = "2";
+  LSRequiresIPhoneOS = 1;
+  MinimumOSVersion = "10.0";
+  UIDeviceFamily = (1);
+  UIRequiredDeviceCapabilities = (armv7);
+  UISupportedInterfaceOrientations = (UIInterfaceOrientationPortrait);
+  UIStatusBarStyle = UIStatusBarStyleDefault;
+  UIViewControllerBasedStatusBarAppearance = 1;
+}
