@@ -36,3 +36,13 @@ Pull requests run the build and attach the `.deb` as a workflow artifact, withou
 2. Split the screen nodes and shared UI components into separate source files.
 3. Connect read-only Instagram features behind replaceable service interfaces.
 4. Add posting only after the viewing experience is stable.
+
+## Local Zebra updates over Wi-Fi
+
+Keep the Mac and iPhone on the same Wi-Fi network. Start the local source from this checkout:
+
+```sh
+python3 tools/local_repo.py
+```
+
+Open `http://<Mac-IP>:8890/` on the iPhone. The page can add the APT source to Zebra and has a button that refreshes the repo from the GitHub `latest` release. Add the source once; after pressing the refresh button, refresh Zebra's Sources and use **Upgrade** for Insta10. A package `postinst` refreshes the Home Screen registration, so manually running `uicache` or respringing should not be needed. The local source works only while this server is running and both devices can reach the Mac.

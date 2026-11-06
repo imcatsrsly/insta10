@@ -3,3 +3,6 @@ packages/
 *.ipa
 *.deb
 DerivedData/
+
+/local-repo/
+__pycache__/

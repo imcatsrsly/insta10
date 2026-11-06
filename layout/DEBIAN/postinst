@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refresh the Home Screen registration after installing or upgrading the app.
+if [ -d /Applications/Insta10.app ]; then
+    if command -v uicache >/dev/null 2>&1; then
+        uicache -p /Applications/Insta10.app >/dev/null 2>&1 || uicache >/dev/null 2>&1 || true
+    fi
+fi
+exit 0
