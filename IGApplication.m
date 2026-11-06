@@ -12,67 +12,74 @@ static UIColor *IGLine(void) { return IGColor(0xDBDBDB); }
 static UIColor *IGMuted(void) { return IGColor(0x999999); }
 static UIColor *IGSkeletonColor(void) { return IGColor(0xE8E8E8); }
 static NSString * const IGTextModeDidChangeNotification = @"IGTextModeDidChange";
-static NSString * const IGTestEventsDidChangeNotification = @"IGTestEventsDidChange";
+static NSString * const IGNotificationEventsDidChangeNotification = @"IGNotificationEventsDidChange";
 static NSString * const IGSettingsDidChangeNotification = @"IGSettingsDidChange";
-static NSString * const IGTestEventsKey = @"IGTestEvents";
+static NSString * const IGNotificationEventsKey = @"IGNotificationEvents";
+static NSString * const IGLegacyTestEventsKey = @"IGTestEvents";
 static BOOL IGTextDemoEnabled(void) {
     id value = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGTextDemoMode"];
     return value == nil || [value boolValue];
 }
-static NSArray *IGTestEvents(void) {
-    return [[NSUserDefaults standardUserDefaults] arrayForKey:IGTestEventsKey] ?: @[];
+// Notifications share a normalized {type, text, date, read} record, independent of
+// whether the current producer is a Dev trigger or a future signed-in account adapter.
+static NSArray *IGNotificationEvents(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSArray *events = [defaults arrayForKey:IGNotificationEventsKey];
+    return events ?: ([defaults arrayForKey:IGLegacyTestEventsKey] ?: @[]);
 }
-static NSArray *IGSortedTestEvents(NSString *type) {
+static NSArray *IGSortedNotificationEvents(NSString *type) {
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
         return !type || [event[@"type"] isEqualToString:type];
     }];
-    NSArray *filtered = [IGTestEvents() filteredArrayUsingPredicate:predicate];
+    NSArray *filtered = [IGNotificationEvents() filteredArrayUsingPredicate:predicate];
     return [filtered sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         return [a[@"date"] compare:b[@"date"]];
     }];
 }
-static NSInteger IGTestEventCount(NSString *type) {
-    return [IGSortedTestEvents(type) count];
+static NSInteger IGNotificationEventCount(NSString *type) {
+    return [IGSortedNotificationEvents(type) count];
 }
-static NSInteger IGUnreadLikeCount(void) {
+static NSInteger IGUnreadEventCount(NSString *type) {
     NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
-        return [event[@"type"] isEqualToString:@"like"] && ![event[@"read"] boolValue];
+        return [event[@"type"] isEqualToString:type] && ![event[@"read"] boolValue];
     }];
-    return [[IGTestEvents() filteredArrayUsingPredicate:predicate] count];
+    return [[IGNotificationEvents() filteredArrayUsingPredicate:predicate] count];
+}
+static NSInteger IGUnreadActivityEventCount(void) {
+    return IGUnreadEventCount(@"comment") + IGUnreadEventCount(@"like") + IGUnreadEventCount(@"follow");
 }
 static NSInteger IGUnreadMessageCount(void) {
-    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
-        return [event[@"type"] isEqualToString:@"message"] && ![event[@"read"] boolValue];
-    }];
-    return [[IGTestEvents() filteredArrayUsingPredicate:predicate] count];
+    return IGUnreadEventCount(@"message");
 }
-static void IGAddTestEvent(NSString *type, NSString *text) {
-    NSMutableArray *events = [IGTestEvents() mutableCopy];
+static void IGSaveNotificationEvents(NSArray *events) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:events forKey:IGNotificationEventsKey];
+    [defaults synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil];
+}
+static void IGAddNotificationEvent(NSString *type, NSString *text) {
+    NSMutableArray *events = [IGNotificationEvents() mutableCopy];
     [events addObject:@{@"type": type, @"text": text ?: @"", @"date": @([[NSDate date] timeIntervalSince1970]), @"read": @NO}];
-    [[NSUserDefaults standardUserDefaults] setObject:events forKey:IGTestEventsKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
+    IGSaveNotificationEvents(events);
 }
-static void IGMarkTestEventsRead(NSString *type) {
+static void IGMarkNotificationEventsRead(NSString *type) {
     NSMutableArray *events = [NSMutableArray array];
     BOOL changed = NO;
-    for (NSDictionary *event in IGTestEvents()) {
+    for (NSDictionary *event in IGNotificationEvents()) {
         NSMutableDictionary *copy = [event mutableCopy];
         BOOL matches = !type || [event[@"type"] isEqualToString:type] ||
-            ([type isEqualToString:@"activity"] && ([event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]));
+            ([type isEqualToString:@"activity"] && ([event[@"type"] isEqualToString:@"comment"] || [event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]));
         if (matches && ![event[@"read"] boolValue]) { copy[@"read"] = @YES; changed = YES; }
         [events addObject:copy];
     }
-    if (changed) {
-        [[NSUserDefaults standardUserDefaults] setObject:events forKey:IGTestEventsKey];
-        [[NSUserDefaults standardUserDefaults] synchronize];
-        [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
-    }
+    if (changed) IGSaveNotificationEvents(events);
 }
-static void IGClearTestEvents(void) {
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:IGTestEventsKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
+static void IGClearNotificationEvents(void) {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults removeObjectForKey:IGNotificationEventsKey];
+    [defaults removeObjectForKey:IGLegacyTestEventsKey];
+    [defaults synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil];
 }
 
 static UIView *IGSkeleton(CGRect frame, CGFloat radius) {
@@ -106,7 +113,11 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 
 @interface IGFeedNode : IGNodeController
 @property (nonatomic, strong) UIScrollView *feedScroll;
+@property (nonatomic, strong) UIButton *inboxButton;
+@property (nonatomic, strong) UIView *inboxCountBadge;
+@property (nonatomic, strong) UILabel *inboxCountLabel;
 - (void)rebuildFeed;
+- (void)updateInboxBadge;
 @end
 @interface IGExploreNode : IGNodeController
 @property (nonatomic, strong) UIScrollView *exploreScroll;
@@ -128,6 +139,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (CGFloat)addOptionRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y;
 - (CGFloat)addDevRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y;
 - (void)triggerMessage;
+- (void)triggerComment;
 - (void)triggerLike;
 - (void)triggerFollower;
 - (void)clearTestEvents;
@@ -197,7 +209,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         y += 42;
         if (IGTextDemoEnabled()) {
             UILabel *likes = [[UILabel alloc] initWithFrame:CGRectMake(14, y, width-28, 21)];
-            likes.text = [NSString stringWithFormat:@"%ld likes", (long)IGTestEventCount(@"like")];
+            likes.text = [NSString stringWithFormat:@"%ld likes", (long)IGNotificationEventCount(@"like")];
             likes.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
             likes.textColor = UIColor.blackColor;
             [self addSubview:likes];
@@ -277,19 +289,32 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     logo.image = [[UIImage imageNamed:@"logotype-feed"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
     self.navigationItem.titleView = logo;
 
-    UIButton *inbox = [UIButton buttonWithType:UIButtonTypeCustom];
-    inbox.frame = CGRectMake(0, 0, 34, 34);
-    inbox.tintColor = UIColor.blackColor;
-    [inbox setImage:IGIconImage(@"inbox", UIColor.blackColor, 26, NO) forState:UIControlStateNormal];
-    [inbox addTarget:self action:@selector(openInbox) forControlEvents:UIControlEventTouchUpInside];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:inbox];
+    self.inboxButton = [UIButton buttonWithType:UIButtonTypeCustom];
+    self.inboxButton.frame = CGRectMake(0, 0, 34, 34);
+    self.inboxButton.tintColor = UIColor.blackColor;
+    [self.inboxButton setImage:IGIconImage(@"inbox", UIColor.blackColor, 26, NO) forState:UIControlStateNormal];
+    [self.inboxButton addTarget:self action:@selector(openInbox) forControlEvents:UIControlEventTouchUpInside];
+    self.inboxCountBadge = [[UIView alloc] initWithFrame:CGRectZero];
+    self.inboxCountBadge.backgroundColor = IGColor(0xED4956);
+    self.inboxCountBadge.layer.borderWidth = 1.0;
+    self.inboxCountBadge.layer.borderColor = UIColor.whiteColor.CGColor;
+    self.inboxCountBadge.userInteractionEnabled = NO;
+    self.inboxCountLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    self.inboxCountLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+    self.inboxCountLabel.textColor = UIColor.whiteColor;
+    self.inboxCountLabel.textAlignment = NSTextAlignmentCenter;
+    [self.inboxCountBadge addSubview:self.inboxCountLabel];
+    [self.inboxButton addSubview:self.inboxCountBadge];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:self.inboxButton];
+    [self updateInboxBadge];
 
     UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
     scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:scroll];
     self.feedScroll = scroll;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(textModeChanged) name:IGTextModeDidChangeNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildFeed) name:IGTestEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildFeed) name:IGNotificationEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateInboxBadge) name:IGNotificationEventsDidChangeNotification object:nil];
     [self rebuildFeed];
 }
 - (void)rebuildFeed {
@@ -306,6 +331,17 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.feedScroll.contentSize = CGSizeMake(width, y);
 }
 - (void)textModeChanged { [self rebuildFeed]; }
+- (void)updateInboxBadge {
+    NSInteger count = IGUnreadMessageCount();
+    self.inboxCountBadge.hidden = count == 0;
+    if (count == 0) return;
+    NSString *text = count > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)count];
+    CGFloat width = text.length == 1 ? 16 : (text.length == 2 ? 20 : 25);
+    self.inboxCountBadge.frame = CGRectMake(34-width, -1, width, 16);
+    self.inboxCountBadge.layer.cornerRadius = 8;
+    self.inboxCountLabel.frame = self.inboxCountBadge.bounds;
+    self.inboxCountLabel.text = text;
+}
 - (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)openInbox { [self openNode:@"Messages"]; }
 @end
@@ -467,12 +503,12 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     [self.view addSubview:scroll];
     self.activityScroll = scroll;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderActivity) name:IGTextModeDidChangeNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderActivity) name:IGTestEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderActivity) name:IGNotificationEventsDidChangeNotification object:nil];
     [self renderActivity];
 }
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    IGMarkTestEventsRead(@"activity");
+    IGMarkNotificationEventsRead(@"activity");
     [self renderActivity];
 }
 - (void)renderActivity {
@@ -480,8 +516,8 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     CGFloat width = self.view.bounds.size.width;
     CGFloat y = 6;
     NSMutableArray *activityEvents = [NSMutableArray array];
-    for (NSDictionary *event in IGSortedTestEvents(nil)) {
-        if ([event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]) [activityEvents addObject:event];
+    for (NSDictionary *event in IGSortedNotificationEvents(nil)) {
+        if ([event[@"type"] isEqualToString:@"comment"] || [event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]) [activityEvents addObject:event];
     }
     NSArray *visibleEvents = [[activityEvents reverseObjectEnumerator] allObjects];
     NSInteger rowCount = visibleEvents.count ? MIN(visibleEvents.count, 20) : 8;
@@ -490,19 +526,21 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         [row addSubview:IGSkeleton(CGRectMake(14, 10, 46, 46), 23)];
         if (visibleEvents.count) {
             NSDictionary *event = visibleEvents[i];
-            NSString *action = [event[@"type"] isEqualToString:@"like"] ? @"liked your photo" : @"started following you";
+            NSString *type = event[@"type"];
+            NSString *action = [type isEqualToString:@"like"] ? @"liked your photo" : ([type isEqualToString:@"follow"] ? @"started following you" : @"commented on your photo");
             NSString *message = [NSString stringWithFormat:@"null %@", action];
             UILabel *label = [self label:message frame:CGRectMake(72, 11, width-132, 42) size:14 color:UIColor.blackColor bold:NO];
             label.numberOfLines = 2;
             [row addSubview:label];
             [row addSubview:[self label:@"now" frame:CGRectMake(width-49, 11, 38, 18) size:12 color:IGMuted() bold:NO]];
-            if ([event[@"type"] isEqualToString:@"like"]) [row addSubview:IGSkeleton(CGRectMake(width-56, 35, 42, 28), 1)];
-            else {
+            if ([type isEqualToString:@"follow"]) {
                 UIButton *followBack = [UIButton buttonWithType:UIButtonTypeSystem];
                 followBack.frame = CGRectMake(width-82, 34, 68, 28);
                 [followBack setTitle:@"Follow" forState:UIControlStateNormal];
                 followBack.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
                 [row addSubview:followBack];
+            } else {
+                [row addSubview:IGSkeleton(CGRectMake(width-56, 35, 42, 28), 1)];
             }
         } else if (IGTextDemoEnabled()) {
             [row addSubview:[self label:@"null" frame:CGRectMake(72, 10, width-140, 20) size:14 color:UIColor.blackColor bold:YES]];
@@ -534,7 +572,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:settings];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderProfile) name:IGTextModeDidChangeNotification object:nil];
     [self renderProfile];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderProfile) name:IGTestEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderProfile) name:IGNotificationEventsDidChangeNotification object:nil];
 }
 - (void)renderProfile {
     [self.view.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
@@ -562,7 +600,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         CGFloat x = statsX + i * statsWidth;
         if (textMode) {
             UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(x, 20, statsWidth, 25)];
-            count.text = [NSString stringWithFormat:@"%ld", (long)(i == 1 ? IGTestEventCount(@"follow") : 0)];
+            count.text = [NSString stringWithFormat:@"%ld", (long)(i == 1 ? IGNotificationEventCount(@"follow") : 0)];
             count.textAlignment = NSTextAlignmentCenter;
             count.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
             count.textColor = UIColor.blackColor;
@@ -770,8 +808,9 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     y += 42;
     NSArray *triggers = @[
         @{ @"title": @"Send message to yourself", @"detail": @"Shows as unread until you open the chat.", @"action": @"Send", @"selector": NSStringFromSelector(@selector(triggerMessage)), @"count": @"" },
-        @{ @"title": @"Add a like", @"detail": [NSString stringWithFormat:@"Likes received: %ld", (long)IGTestEventCount(@"like")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerLike)), @"count": @"" },
-        @{ @"title": @"Add a follower", @"detail": [NSString stringWithFormat:@"Followers added: %ld", (long)IGTestEventCount(@"follow")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerFollower)), @"count": @"" }
+        @{ @"title": @"Add a comment alert", @"detail": [NSString stringWithFormat:@"Comments received: %ld", (long)IGNotificationEventCount(@"comment")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerComment)), @"count": @"" },
+        @{ @"title": @"Add a like", @"detail": [NSString stringWithFormat:@"Likes received: %ld", (long)IGNotificationEventCount(@"like")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerLike)), @"count": @"" },
+        @{ @"title": @"Add a follower", @"detail": [NSString stringWithFormat:@"Followers added: %ld", (long)IGNotificationEventCount(@"follow")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerFollower)), @"count": @"" }
     ];
     for (NSDictionary *trigger in triggers) {
         UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 66)];
@@ -813,23 +852,27 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Send" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *text = alert.textFields.firstObject.text;
-        if (text.length) IGAddTestEvent(@"message", text);
+        if (text.length) IGAddNotificationEvent(@"message", text);
         [self renderSettings];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)triggerLike {
-    IGAddTestEvent(@"like", @"");
+    IGAddNotificationEvent(@"like", @"");
+    [self renderSettings];
+}
+- (void)triggerComment {
+    IGAddNotificationEvent(@"comment", @"");
     [self renderSettings];
 }
 - (void)triggerFollower {
-    IGAddTestEvent(@"follow", @"");
+    IGAddNotificationEvent(@"follow", @"");
     [self renderSettings];
 }
 - (void)clearTestEvents {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Clear test events?" message:@"This removes the local test messages, likes, and followers." preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Clear test events?" message:@"This removes the local test messages, comments, likes, and followers." preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Clear" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { IGClearTestEvents(); [self renderSettings]; }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Clear" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { IGClearNotificationEvents(); [self renderSettings]; }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 @end
@@ -842,13 +885,13 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:scroll];
     self.inboxScroll = scroll;
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderInbox) name:IGTestEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderInbox) name:IGNotificationEventsDidChangeNotification object:nil];
     [self renderInbox];
 }
 - (void)renderInbox {
     [self.inboxScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     CGFloat width = self.view.bounds.size.width;
-    NSArray *messages = IGSortedTestEvents(@"message");
+    NSArray *messages = IGSortedNotificationEvents(@"message");
     if (messages.count == 0) {
         [self.inboxScroll addSubview:[self label:@"No messages yet" frame:CGRectMake(16, 28, width-32, 24) size:14 color:IGMuted() bold:NO]];
         self.inboxScroll.contentSize = CGSizeMake(width, 80);
@@ -898,13 +941,13 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    IGMarkTestEventsRead(@"message");
+    IGMarkNotificationEventsRead(@"message");
 }
 - (void)renderConversation {
     [self.conversationScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     CGFloat width = self.view.bounds.size.width;
     CGFloat y = 16;
-    for (NSDictionary *message in IGSortedTestEvents(@"message")) {
+    for (NSDictionary *message in IGSortedNotificationEvents(@"message")) {
         NSString *text = message[@"text"] ?: @"";
         CGFloat bubbleWidth = MIN(width-72, MAX(110, [text sizeWithAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15]}].width + 28));
         CGFloat bubbleHeight = MAX(42, ceil([text boundingRectWithSize:CGSizeMake(bubbleWidth-24, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15]} context:nil].size.height) + 20);
@@ -1069,8 +1112,10 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @property (nonatomic, strong) NSMutableArray *footerButtons;
 @property (nonatomic, strong) NSMutableArray *footerImageViews;
 @property (nonatomic, strong) UIView *activityDot;
+@property (nonatomic, strong) UIView *activitySummaryPopup;
 - (void)selectFooterTab:(UIButton *)sender;
 - (void)updateFooterIcons;
+- (void)updateActivitySummaryPopup;
 - (void)updateFooterVisibility;
 @end
 
@@ -1120,11 +1165,15 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     }
     self.activityDot = [[UIView alloc] initWithFrame:CGRectZero];
     self.activityDot.backgroundColor = IGColor(0xED4956);
-    self.activityDot.layer.cornerRadius = 2.5;
+    self.activityDot.layer.cornerRadius = 2.0;
     self.activityDot.userInteractionEnabled = NO;
     [self.footerView addSubview:self.activityDot];
+    self.activitySummaryPopup = [[UIView alloc] initWithFrame:CGRectZero];
+    self.activitySummaryPopup.backgroundColor = UIColor.clearColor;
+    self.activitySummaryPopup.userInteractionEnabled = NO;
+    [self.footerView addSubview:self.activitySummaryPopup];
     [self.view addSubview:self.footerView];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateFooterIcons) name:IGTestEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateFooterIcons) name:IGNotificationEventsDidChangeNotification object:nil];
     [self updateFooterIcons];
     [self updateFooterVisibility];
 }
@@ -1148,13 +1197,14 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     // The 4 pt unread marker sits under the heart; it never affects icon layout.
     CGFloat dotSize = 4.0;
     self.activityDot.frame = CGRectMake(3*itemWidth + (itemWidth-dotSize)/2.0, 39.25-dotSize/2.0, dotSize, dotSize);
+    [self updateActivitySummaryPopup];
     [self updateFooterVisibility];
 }
 - (void)selectFooterTab:(UIButton *)sender {
     self.selectedIndex = sender.tag;
     [self updateFooterIcons];
     [self updateFooterVisibility];
-    if (sender.tag == 3) IGMarkTestEventsRead(@"activity");
+    if (sender.tag == 3) IGMarkNotificationEventsRead(@"activity");
 }
 - (void)updateFooterIcons {
     NSArray *names = @[@"tab-home", @"tab-search", @"tab-camera", @"tab-heart", @"tab-profile"];
@@ -1163,7 +1213,78 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         UIColor *color = i == self.selectedIndex ? UIColor.blackColor : IGMuted();
         icon.image = IGIconImage(names[i], color, 24, i == self.selectedIndex);
     }
-    self.activityDot.hidden = IGUnreadLikeCount() == 0;
+    self.activityDot.hidden = IGUnreadActivityEventCount() == 0;
+    [self updateActivitySummaryPopup];
+}
+- (void)updateActivitySummaryPopup {
+    [self.activitySummaryPopup.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    [self.activitySummaryPopup.layer.sublayers makeObjectsPerformSelector:@selector(removeFromSuperlayer)];
+
+    NSArray *types = @[@"comment", @"like", @"follow"];
+    NSArray *glyphs = @[@"notification-toast-glyph-comments", @"notification-toast-glyph-likes", @"notification-toast-glyph-photosofyou"];
+    NSMutableArray *items = [NSMutableArray array];
+    UIFont *font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    CGFloat iconSize = 14.0, iconTextGap = 6.0, itemGap = 10.0, horizontalInset = 14.0;
+    CGFloat contentWidth = 0;
+    for (NSInteger i = 0; i < types.count; i++) {
+        NSInteger count = IGUnreadEventCount(types[i]);
+        if (count == 0) continue;
+        NSString *text = count > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)count];
+        CGFloat textWidth = ceil([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
+        CGFloat itemWidth = iconSize + iconTextGap + textWidth;
+        [items addObject:@{@"glyph": glyphs[i], @"text": text, @"width": @(itemWidth)}];
+        contentWidth += itemWidth;
+    }
+    if (items.count == 0) {
+        self.activitySummaryPopup.hidden = YES;
+        return;
+    }
+
+    contentWidth += itemGap * (items.count-1);
+    CGFloat screenWidth = self.view.bounds.size.width;
+    CGFloat width = MIN(contentWidth + horizontalInset*2.0, screenWidth-16.0);
+    CGFloat bodyHeight = 36.5, tailHeight = 11.5, totalHeight = bodyHeight + tailHeight;
+    CGFloat itemScale = width < contentWidth + horizontalInset*2.0 ? (width-horizontalInset*2.0)/contentWidth : 1.0;
+    self.activitySummaryPopup.hidden = NO;
+    self.activitySummaryPopup.frame = CGRectMake(0, -totalHeight, width, totalHeight);
+    self.activitySummaryPopup.center = CGPointMake(3.5*(screenWidth/5.0), -totalHeight/2.0);
+
+    UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, width, bodyHeight) cornerRadius:6.0];
+    CGFloat nubHalfWidth = 7.0;
+    [shape moveToPoint:CGPointMake(width/2.0-nubHalfWidth, bodyHeight-1.0)];
+    [shape addLineToPoint:CGPointMake(width/2.0, totalHeight)];
+    [shape addLineToPoint:CGPointMake(width/2.0+nubHalfWidth, bodyHeight-1.0)];
+    [shape closePath];
+    CAShapeLayer *background = [CAShapeLayer layer];
+    background.frame = self.activitySummaryPopup.bounds;
+    background.path = shape.CGPath;
+    background.fillColor = IGColor(0xEB6E68).CGColor;
+    background.shadowColor = UIColor.blackColor.CGColor;
+    background.shadowOpacity = 0.12;
+    background.shadowRadius = 2.0;
+    background.shadowOffset = CGSizeMake(0, 1);
+    background.shadowPath = shape.CGPath;
+    [self.activitySummaryPopup.layer addSublayer:background];
+
+    CGFloat x = (width-contentWidth*itemScale-itemGap*(items.count-1))/2.0;
+    CGFloat contentY = (bodyHeight-16.0)/2.0;
+    for (NSDictionary *item in items) {
+        CGFloat itemWidth = [item[@"width"] doubleValue]*itemScale;
+        UIImage *glyph = [[UIImage imageNamed:item[@"glyph"]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(x, contentY+1.0, iconSize*itemScale, iconSize*itemScale)];
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        icon.image = glyph;
+        icon.tintColor = UIColor.whiteColor;
+        [self.activitySummaryPopup addSubview:icon];
+
+        UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetMaxX(icon.frame)+iconTextGap*itemScale, contentY-1.0, itemWidth-iconSize*itemScale-iconTextGap*itemScale, 18.0)];
+        count.font = font;
+        count.textColor = UIColor.whiteColor;
+        count.textAlignment = NSTextAlignmentLeft;
+        count.text = item[@"text"];
+        [self.activitySummaryPopup addSubview:count];
+        x += itemWidth + itemGap;
+    }
 }
 - (void)updateFooterVisibility {
     UINavigationController *navigation = (UINavigationController *)self.selectedViewController;
@@ -1182,7 +1303,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (void)tabBarController:(UITabBarController *)tabBarController didSelectViewController:(UIViewController *)viewController {
     [self updateFooterIcons];
     [self updateFooterVisibility];
-    if ([viewController isEqual:self.viewControllers[3]]) IGMarkTestEventsRead(@"activity");
+    if ([viewController isEqual:self.viewControllers[3]]) IGMarkNotificationEventsRead(@"activity");
 }
 - (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
     if (navigationController == self.selectedViewController) [self updateFooterVisibility];

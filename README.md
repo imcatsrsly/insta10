@@ -12,7 +12,9 @@ An Objective-C UIKit interface prototype designed for iOS 10, with the iPhone 5s
 - Reels shelf toggle in Options
 - Text demo mode (on by default) with `null` / zero placeholders and live switching
 - Dev controls and local test triggers for Direct messages, likes, and followers
-- Centered custom tab footer with an unread activity dot
+- Reference-sized 2016 footer with the unread activity summary bubble and heart dot
+- Activity summary icons taken from Instagram 10.29's notification glyph assets
+- Unread Direct count badge; Dev triggers and both badges use the same normalized notification events
 - Reference-matched 2016 repost and Direct inbox glyphs; translucent tab bar
 - 4-inch launch image support so iPhone 5/5s use the full screen
 - Shared vector icons drawn in the iOS 10 line style
