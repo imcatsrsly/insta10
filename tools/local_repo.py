@@ -82,7 +82,12 @@ def write_repo(deb: Path) -> None:
     stanza, _ = make_index(deb)
     PACKAGES_PATH.parent.mkdir(parents=True, exist_ok=True)
     PACKAGES_PATH.write_text(stanza)
-    PACKAGES_GZ_PATH.write_bytes(gzip.compress(stanza.encode(), mtime=0))
+    packages_gzip = gzip.compress(stanza.encode(), mtime=0)
+    PACKAGES_GZ_PATH.write_bytes(packages_gzip)
+    # Zebra's add-source flow treats a bare URL as a flat APT source and
+    # probes /Packages.{xz,bz2,gz}, so mirror the index at the URL root too.
+    (DATA / "Packages").write_text(stanza)
+    (DATA / "Packages.gz").write_bytes(packages_gzip)
     hashes = []
     release_root = DATA / "dists/stable"
     for file in (PACKAGES_PATH, PACKAGES_GZ_PATH):
@@ -97,6 +102,17 @@ def write_repo(deb: Path) -> None:
     )
     RELEASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     RELEASE_PATH.write_text(release)
+    flat_hashes = []
+    for file in (DATA / "Packages", DATA / "Packages.gz"):
+        payload = file.read_bytes()
+        flat_hashes.append(f" {hashlib.sha256(payload).hexdigest()} {len(payload):16d} {file.name}")
+    flat_release = (
+        "Origin: Insta10 Local\nLabel: Insta10\nSuite: ./\nCodename: ./\n"
+        "Architectures: iphoneos-arm\nDescription: Local Insta10 updates\n"
+        f"Date: {datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S UTC')}\n"
+        "SHA256:\n" + "\n".join(flat_hashes) + "\n"
+    )
+    (DATA / "Release").write_text(flat_release)
 
 
 def refresh(force: bool = False) -> str:
@@ -108,10 +124,14 @@ def refresh(force: bool = False) -> str:
         temp = POOL / "Insta10-latest.deb.tmp"
         POOL.mkdir(parents=True, exist_ok=True)
         download_url = DOWNLOAD_URL + "?refresh=" + str(int(time.time()))
-        subprocess.run(
-            ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), download_url],
-            check=True,
-        )
+        try:
+            subprocess.run(
+                ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), download_url],
+                check=True,
+            )
+        except Exception:
+            temp.unlink(missing_ok=True)
+            raise
         try:
             fields = package_control(temp)
             if fields.get("Package") != "com.imcatsrsly.insta10":
@@ -193,8 +213,13 @@ def main():
         version = refresh(force=True)
         print(f"Loaded Insta10 {version} from GitHub", flush=True)
     except Exception as exc:
-        print(f"GitHub initial sync failed: {exc}", flush=True)
-        raise
+        cached = sorted(POOL.glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
+        if not cached:
+            print(f"GitHub sync failed and there is no cached package: {exc}", flush=True)
+            raise
+        _, version = make_index(cached[0])
+        write_repo(cached[0])
+        print(f"GitHub is unavailable; serving cached Insta10 {version}", flush=True)
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Insta10 repo listening on port {PORT}; open http://<Mac-IP>:{PORT}/ on the iPhone", flush=True)
     print("Keep this process running while using the local Zebra source. Ctrl+C stops it.", flush=True)
