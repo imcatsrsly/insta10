@@ -53,3 +53,22 @@ jobs:
             --notes "Built from commit ${GITHUB_SHA}." \
             --prerelease \
             --target "$GITHUB_SHA"
+
+          package_file=(packages/*.deb)
+          cp "${package_file[0]}" packages/Insta10-latest.deb
+          if gh release view latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" \
+              --field sha="$GITHUB_SHA" --field force=true >/dev/null
+            gh release upload latest packages/Insta10-latest.deb \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit latest --repo "$GITHUB_REPOSITORY" \
+              --title "Insta10 latest" \
+              --notes "Latest successful main build from commit ${GITHUB_SHA}."
+          else
+            gh release create latest packages/Insta10-latest.deb \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Insta10 latest" \
+              --notes "Latest successful main build from commit ${GITHUB_SHA}." \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi
