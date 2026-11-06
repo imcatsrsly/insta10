@@ -14,14 +14,16 @@ Each screen is a separate `IGNodeController` subclass. The tab controller routes
 
 ## Build
 
-Requires Theos plus a **device** iOS 10.3 SDK. The SDK currently present in the development environment has simulator-only linker stubs, so it cannot produce an installable phone package.
+Requires Theos plus the patched iOS 10.3 SDK from the Theos SDK release. The configured build is arm64 so it runs on the iPhone 5s and newer 64-bit devices.
 
 ```sh
 export THEOS="$HOME/theos"
-make package
+make package FINALPACKAGE=1
 ```
 
-The configured architectures are armv7 and arm64. On a jailbroken device, Theos installs the package with `dpkg` and `uicache`; an IPA can also be packaged for AppSync Unified.
+The project uses the classic linker mode because the iOS 10 SDK has older `.tbd` stubs. After a pull request is merged to `main`, GitHub Actions builds a `.deb` and publishes it as a prerelease. Open the repository's Releases page and download the newest package. On a jailbroken iPhone, open the `.deb` in Filza or install it with `dpkg -i` and refresh the icon cache with `uicache`.
+
+Pull requests run the build and attach the `.deb` as a workflow artifact, without publishing a release.
 
 ## Next
 
