@@ -1131,16 +1131,23 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGFloat width = self.view.bounds.size.width;
-    CGFloat height = 49;
+    // The 2016 reference footer is 91 px high on a 2x iPhone canvas (45.5 pt).
+    // Keep the sub-point size so its top edge and artwork align with that reference.
+    CGFloat height = 45.5;
     self.footerView.frame = CGRectMake(0, self.view.bounds.size.height-height, width, height);
     CGFloat itemWidth = width/5.0;
     for (NSInteger i = 0; i < self.footerButtons.count; i++) {
         UIButton *button = self.footerButtons[i];
         button.frame = CGRectMake(i*itemWidth, 0, itemWidth, height);
         UIImageView *icon = self.footerImageViews[i];
-        icon.frame = CGRectMake((itemWidth-24)/2.0, 10.5, 24, 24);
+        // Instagram's original tab assets are 24 pt, except the activity glyph at 25 pt.
+        // Center each image canvas in its tab cell and in the footer, regardless of unread state.
+        CGFloat iconSize = i == 3 ? 25.0 : 24.0;
+        icon.frame = CGRectMake((itemWidth-iconSize)/2.0, (height-iconSize)/2.0, iconSize, iconSize);
     }
-    self.activityDot.frame = CGRectMake(3*itemWidth + (itemWidth-5)/2.0, 39, 5, 5);
+    // The 4 pt unread marker sits under the heart; it never affects icon layout.
+    CGFloat dotSize = 4.0;
+    self.activityDot.frame = CGRectMake(3*itemWidth + (itemWidth-dotSize)/2.0, 39.25-dotSize/2.0, dotSize, dotSize);
     [self updateFooterVisibility];
 }
 - (void)selectFooterTab:(UIButton *)sender {
