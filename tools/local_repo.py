@@ -26,7 +26,7 @@ PACKAGES_GZ_PATH = PACKAGES_PATH.with_suffix(".gz")
 RELEASE_PATH = DATA / "dists/stable/Release"
 DOWNLOAD_URL = "https://github.com/imcatsrsly/insta10/releases/download/latest/Insta10-latest.deb"
 PORT = int(os.environ.get("INSTA10_REPO_PORT", "8890"))
-CHECK_INTERVAL = 60
+CHECK_INTERVAL = 10
 _lock = threading.Lock()
 _last_check = 0.0
 _package_version = "not loaded"
@@ -153,7 +153,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DATA), **kwargs)
 
+    def refresh_for_index(self):
+        path = self.path.split("?", 1)[0]
+        if path in ("/Packages", "/Packages.gz", "/Packages.xz", "/Packages.bz2", "/Packages.lzma", "/Release", "/dists/stable/Release", "/dists/stable/main/binary-iphoneos-arm/Packages", "/dists/stable/main/binary-iphoneos-arm/Packages.gz"):
+            try:
+                refresh()
+            except Exception as exc:
+                # Keep serving the last cached package if GitHub is temporarily unreachable.
+                print(f"GitHub sync skipped; serving cached { _package_version }: {exc}", flush=True)
+
+    def do_HEAD(self):
+        self.refresh_for_index()
+        return super().do_HEAD()
+
     def do_GET(self):
+        self.refresh_for_index()
         if self.path in ("/", "/index.html"):
             try:
                 version = refresh()
@@ -180,7 +194,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 <form method="post" action="/refresh"><button>Проверить GitHub и обновить репозиторий</button></form>
 <a class="btn" href="zbra://sources/add/{html.escape(source)}">Добавить источник в Zebra</a>
 <p>Источник Zebra: <code>{html.escape(source)}</code></p>
-<p class="muted">Добавь источник в Zebra один раз. Для обновления нажми верхнюю кнопку, затем обнови источники в Zebra и нажми Upgrade у Insta10. Удалять приложение не нужно.</p>
+<p class="muted"><b>Добавить источник нужно только один раз.</b> Если Insta10 уже виден в Sources в Zebra, эту кнопку больше не нажимай. Новая сборка синхронизируется с GitHub при следующем обновлении источника в Zebra; затем нажми Upgrade у Insta10. Удалять приложение не нужно. Верхняя кнопка нужна только для ручной синхронизации с GitHub.</p>
 <p><a href="/pool/main/i/insta10/">Список deb-файлов</a></p></main>"""
             body = page.encode()
             self.send_response(200)

@@ -47,4 +47,4 @@ Keep the Mac and iPhone on the same Wi-Fi network. Start the local source from t
 python3 tools/local_repo.py
 ```
 
-Open `http://<Mac-IP>:8890/` on the iPhone. The page can add the APT source to Zebra and has a button that refreshes the repo from the GitHub `latest` release. Add the source once; after pressing the refresh button, refresh Zebra's Sources and use **Upgrade** for Insta10. A package `postinst` refreshes the Home Screen registration, so manually running `uicache` or respringing should not be needed. The local source works only while this server is running and both devices can reach the Mac.
+Open `http://<Mac-IP>:8890/` on the iPhone. The page can add the APT source to Zebra and has an optional manual sync button. Add the source once. On every later Zebra source refresh, the Mac server automatically synchronizes the `latest` GitHub release before returning the package index; then use **Upgrade** for Insta10. A package `postinst` refreshes the Home Screen registration, so manually running `uicache` or respringing should not be needed. The local source works only while this server is running and both devices can reach the Mac.
