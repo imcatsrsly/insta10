@@ -16,6 +16,8 @@ static NSString * const IGNotificationEventsDidChangeNotification = @"IGNotifica
 static NSString * const IGSettingsDidChangeNotification = @"IGSettingsDidChange";
 static NSString * const IGNotificationEventsKey = @"IGNotificationEvents";
 static NSString * const IGLegacyTestEventsKey = @"IGTestEvents";
+// IGTooltipView in Instagram 10.29 receives a runtime display duration; use a short toast window here.
+static const NSTimeInterval IGActivityToastDuration = 3.0;
 static BOOL IGTextDemoEnabled(void) {
     id value = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGTextDemoMode"];
     return value == nil || [value boolValue];
@@ -51,16 +53,16 @@ static NSInteger IGUnreadActivityEventCount(void) {
 static NSInteger IGUnreadMessageCount(void) {
     return IGUnreadEventCount(@"message");
 }
-static void IGSaveNotificationEvents(NSArray *events) {
+static void IGSaveNotificationEvents(NSArray *events, NSString *changedType) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults setObject:events forKey:IGNotificationEventsKey];
     [defaults synchronize];
-    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil userInfo:@{@"type": changedType ?: @"all"}];
 }
 static void IGAddNotificationEvent(NSString *type, NSString *text) {
     NSMutableArray *events = [IGNotificationEvents() mutableCopy];
     [events addObject:@{@"type": type, @"text": text ?: @"", @"date": @([[NSDate date] timeIntervalSince1970]), @"read": @NO}];
-    IGSaveNotificationEvents(events);
+    IGSaveNotificationEvents(events, type);
 }
 static void IGMarkNotificationEventsRead(NSString *type) {
     NSMutableArray *events = [NSMutableArray array];
@@ -72,14 +74,14 @@ static void IGMarkNotificationEventsRead(NSString *type) {
         if (matches && ![event[@"read"] boolValue]) { copy[@"read"] = @YES; changed = YES; }
         [events addObject:copy];
     }
-    if (changed) IGSaveNotificationEvents(events);
+    if (changed) IGSaveNotificationEvents(events, type);
 }
 static void IGClearNotificationEvents(void) {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     [defaults removeObjectForKey:IGNotificationEventsKey];
     [defaults removeObjectForKey:IGLegacyTestEventsKey];
     [defaults synchronize];
-    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGNotificationEventsDidChangeNotification object:nil userInfo:@{@"type": @"all"}];
 }
 
 static UIView *IGSkeleton(CGRect frame, CGFloat radius) {
@@ -1113,9 +1115,15 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @property (nonatomic, strong) NSMutableArray *footerImageViews;
 @property (nonatomic, strong) UIView *activityDot;
 @property (nonatomic, strong) UIView *activitySummaryPopup;
+@property (nonatomic, strong) NSTimer *activitySummaryTimer;
+@property (nonatomic, assign) BOOL activitySummaryVisible;
+@property (nonatomic, assign) BOOL didPresentInitialActivitySummary;
 - (void)selectFooterTab:(UIButton *)sender;
 - (void)updateFooterIcons;
 - (void)updateActivitySummaryPopup;
+- (void)notificationEventsDidChange:(NSNotification *)notification;
+- (void)presentActivitySummaryPopup;
+- (void)dismissActivitySummaryPopup;
 - (void)updateFooterVisibility;
 @end
 
@@ -1173,9 +1181,16 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.activitySummaryPopup.userInteractionEnabled = NO;
     [self.footerView addSubview:self.activitySummaryPopup];
     [self.view addSubview:self.footerView];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateFooterIcons) name:IGNotificationEventsDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(notificationEventsDidChange:) name:IGNotificationEventsDidChangeNotification object:nil];
     [self updateFooterIcons];
     [self updateFooterVisibility];
+}
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (!self.didPresentInitialActivitySummary) {
+        self.didPresentInitialActivitySummary = YES;
+        if (IGUnreadActivityEventCount() > 0) [self presentActivitySummaryPopup];
+    }
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -1216,6 +1231,39 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.activityDot.hidden = IGUnreadActivityEventCount() == 0;
     [self updateActivitySummaryPopup];
 }
+- (void)notificationEventsDidChange:(NSNotification *)notification {
+    [self updateFooterIcons];
+    NSString *type = notification.userInfo[@"type"];
+    BOOL socialEvent = [@[@"comment", @"like", @"follow"] containsObject:type ?: @""];
+    if (socialEvent && IGUnreadActivityEventCount() > 0) [self presentActivitySummaryPopup];
+    else if (IGUnreadActivityEventCount() == 0) [self dismissActivitySummaryPopup];
+}
+- (void)presentActivitySummaryPopup {
+    if (IGUnreadActivityEventCount() == 0 || self.footerView.hidden) return;
+    [self.activitySummaryTimer invalidate];
+    self.activitySummaryTimer = [NSTimer scheduledTimerWithTimeInterval:IGActivityToastDuration target:self selector:@selector(dismissActivitySummaryPopup) userInfo:nil repeats:NO];
+    if (self.activitySummaryVisible) return;
+    self.activitySummaryVisible = YES;
+    self.activitySummaryPopup.hidden = NO;
+    self.activitySummaryPopup.alpha = 0;
+    self.activitySummaryPopup.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        self.activitySummaryPopup.alpha = 1;
+        self.activitySummaryPopup.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+- (void)dismissActivitySummaryPopup {
+    [self.activitySummaryTimer invalidate];
+    self.activitySummaryTimer = nil;
+    if (!self.activitySummaryVisible) return;
+    self.activitySummaryVisible = NO;
+    [UIView animateWithDuration:0.20 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+        self.activitySummaryPopup.alpha = 0;
+        self.activitySummaryPopup.transform = CGAffineTransformMakeScale(0.96, 0.96);
+    } completion:^(BOOL finished) {
+        if (!self.activitySummaryVisible) self.activitySummaryPopup.hidden = YES;
+    }];
+}
 - (void)updateActivitySummaryPopup {
     [self.activitySummaryPopup.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     [self.activitySummaryPopup.layer.sublayers makeObjectsPerformSelector:@selector(removeFromSuperlayer)];
@@ -1237,6 +1285,11 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     }
     if (items.count == 0) {
         self.activitySummaryPopup.hidden = YES;
+        self.activitySummaryPopup.alpha = 0;
+        self.activitySummaryPopup.transform = CGAffineTransformIdentity;
+        self.activitySummaryVisible = NO;
+        [self.activitySummaryTimer invalidate];
+        self.activitySummaryTimer = nil;
         return;
     }
 
@@ -1244,29 +1297,47 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     CGFloat screenWidth = self.view.bounds.size.width;
     CGFloat width = MIN(contentWidth + horizontalInset*2.0, screenWidth-16.0);
     CGFloat bodyHeight = 36.5, tailHeight = 11.5, totalHeight = bodyHeight + tailHeight;
-    CGFloat itemScale = width < contentWidth + horizontalInset*2.0 ? (width-horizontalInset*2.0)/contentWidth : 1.0;
-    self.activitySummaryPopup.hidden = NO;
+    CGFloat gapsWidth = itemGap*(items.count-1);
+    CGFloat itemWidths = contentWidth-gapsWidth;
+    CGFloat availableItemWidth = MAX(0, width-horizontalInset*2.0-gapsWidth);
+    CGFloat itemScale = itemWidths > availableItemWidth ? availableItemWidth/itemWidths : 1.0;
+    self.activitySummaryPopup.hidden = !self.activitySummaryVisible;
+    self.activitySummaryPopup.alpha = self.activitySummaryVisible ? 1 : 0;
+    self.activitySummaryPopup.transform = self.activitySummaryVisible ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.92, 0.92);
     self.activitySummaryPopup.frame = CGRectMake(0, -totalHeight, width, totalHeight);
     self.activitySummaryPopup.center = CGPointMake(3.5*(screenWidth/5.0), -totalHeight/2.0);
 
-    UIBezierPath *shape = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, width, bodyHeight) cornerRadius:6.0];
     CGFloat nubHalfWidth = 7.0;
-    [shape moveToPoint:CGPointMake(width/2.0-nubHalfWidth, bodyHeight-1.0)];
-    [shape addLineToPoint:CGPointMake(width/2.0, totalHeight)];
-    [shape addLineToPoint:CGPointMake(width/2.0+nubHalfWidth, bodyHeight-1.0)];
-    [shape closePath];
-    CAShapeLayer *background = [CAShapeLayer layer];
-    background.frame = self.activitySummaryPopup.bounds;
-    background.path = shape.CGPath;
-    background.fillColor = IGColor(0xEB6E68).CGColor;
-    background.shadowColor = UIColor.blackColor.CGColor;
-    background.shadowOpacity = 0.12;
-    background.shadowRadius = 2.0;
-    background.shadowOffset = CGSizeMake(0, 1);
-    background.shadowPath = shape.CGPath;
-    [self.activitySummaryPopup.layer addSublayer:background];
+    UIBezierPath *tailPath = [UIBezierPath bezierPath];
+    [tailPath moveToPoint:CGPointMake(width/2.0-nubHalfWidth, bodyHeight-1.0)];
+    [tailPath addLineToPoint:CGPointMake(width/2.0, totalHeight)];
+    [tailPath addLineToPoint:CGPointMake(width/2.0+nubHalfWidth, bodyHeight-1.0)];
+    [tailPath closePath];
+    CAShapeLayer *tail = [CAShapeLayer layer];
+    tail.frame = self.activitySummaryPopup.bounds;
+    tail.path = tailPath.CGPath;
+    tail.fillColor = IGColor(0xEB6E68).CGColor;
+    tail.shadowColor = UIColor.blackColor.CGColor;
+    tail.shadowOpacity = 0.10;
+    tail.shadowRadius = 1.5;
+    tail.shadowOffset = CGSizeMake(0, 1);
+    tail.shadowPath = tailPath.CGPath;
+    [self.activitySummaryPopup.layer addSublayer:tail];
 
-    CGFloat x = (width-contentWidth*itemScale-itemGap*(items.count-1))/2.0;
+    UIBezierPath *bodyPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, width, bodyHeight) cornerRadius:6.0];
+    CAShapeLayer *body = [CAShapeLayer layer];
+    body.frame = self.activitySummaryPopup.bounds;
+    body.path = bodyPath.CGPath;
+    body.fillColor = IGColor(0xEB6E68).CGColor;
+    body.shadowColor = UIColor.blackColor.CGColor;
+    body.shadowOpacity = 0.12;
+    body.shadowRadius = 2.0;
+    body.shadowOffset = CGSizeMake(0, 1);
+    body.shadowPath = bodyPath.CGPath;
+    [self.activitySummaryPopup.layer addSublayer:body];
+
+    CGFloat drawnContentWidth = itemWidths*itemScale+gapsWidth;
+    CGFloat x = (width-drawnContentWidth)/2.0;
     CGFloat contentY = (bodyHeight-16.0)/2.0;
     for (NSDictionary *item in items) {
         CGFloat itemWidth = [item[@"width"] doubleValue]*itemScale;
@@ -1317,5 +1388,8 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         [navigation pushViewController:comments animated:YES];
     }
 }
-- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)dealloc {
+    [self.activitySummaryTimer invalidate];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 @end

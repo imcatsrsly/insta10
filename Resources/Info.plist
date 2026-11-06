@@ -13,8 +13,8 @@
     };
   };
   CFBundlePackageType = APPL;
-	CFBundleShortVersionString = "0.1.8";
-	CFBundleVersion = "9";
+	CFBundleShortVersionString = "0.1.9";
+	CFBundleVersion = "10";
   LSRequiresIPhoneOS = 1;
   MinimumOSVersion = "10.0";
   UIDeviceFamily = (1);
