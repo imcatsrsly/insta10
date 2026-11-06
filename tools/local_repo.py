@@ -12,8 +12,8 @@ import os
 import tarfile
 import threading
 import socket
+import subprocess
 import time
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from email.parser import Parser
@@ -105,12 +105,12 @@ def refresh(force: bool = False) -> str:
         if not force and time.time() - _last_check < CHECK_INTERVAL:
             return _package_version
         _last_check = time.time()
-        request = urllib.request.Request(DOWNLOAD_URL, headers={"User-Agent": "Insta10-LAN-Repo/1.0"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            content = response.read()
         temp = POOL / "Insta10-latest.deb.tmp"
         POOL.mkdir(parents=True, exist_ok=True)
-        temp.write_bytes(content)
+        subprocess.run(
+            ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), DOWNLOAD_URL],
+            check=True,
+        )
         try:
             fields = package_control(temp)
             if fields.get("Package") != "com.imcatsrsly.insta10":
