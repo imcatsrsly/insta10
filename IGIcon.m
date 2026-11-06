@@ -2,6 +2,35 @@
 #include <math.h>
 
 UIImage *IGIconImage(NSString *name, UIColor *color, CGFloat size, BOOL selected) {
+    // Prefer Instagram 10.29's own assets from the supplied iOS 8-era app bundle.
+    // The paths below are asset-catalog names, not hand-drawn substitutes.
+    NSDictionary *assets = @{
+        @"tab-home": selected ? @"tabbar-home-icon-highlighted" : @"tabbar-home-icon",
+        @"tab-search": selected ? @"tabbar-search-icon-highlighted" : @"tabbar-search-icon",
+        @"tab-camera": selected ? @"tabbar-camera-icon-highlighted" : @"tabbar-camera-icon",
+        @"tab-heart": selected ? @"tabbar-activity-icon-highlighted" : @"tabbar-activity-icon",
+        @"tab-profile": selected ? @"tabbar-profile-icon-highlighted" : @"tabbar-profile-icon",
+        @"home": selected ? @"tabbar-home-icon-highlighted" : @"tabbar-home-icon",
+        @"search": selected ? @"tabbar-search-icon-highlighted" : @"tabbar-search-icon",
+        @"camera": selected ? @"tabbar-camera-icon-highlighted" : @"tabbar-camera-icon",
+        @"heart": selected ? @"tabbar-activity-icon-highlighted" : @"ufi-button-like",
+        @"profile": selected ? @"tabbar-profile-icon-highlighted" : @"tabbar-profile-icon",
+        @"comment": @"ufi-button-comment",
+        @"share": @"ufi-button-reshare",
+        @"inbox": @"direct-entry-point-off",
+        @"more": @"bar-button-more",
+        @"grid": @"profile-grid",
+        @"list": @"profile-list",
+        @"pin": @"profile-photos",
+        @"tagged": @"profile-usertags",
+        @"addPerson": @"bar-button-discover-people",
+        @"settings": @"bar-button-settings",
+        @"play": @"video-play-small"
+    };
+    NSString *assetName = assets[name];
+    UIImage *asset = assetName ? [UIImage imageNamed:assetName] : nil;
+    if (asset) return [asset imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+
     CGSize canvas = CGSizeMake(size, size);
     UIGraphicsBeginImageContextWithOptions(canvas, NO, 0);
     CGContextRef context = UIGraphicsGetCurrentContext();

@@ -45,8 +45,16 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @interface IGActivityNode : IGNodeController @end
 @interface IGProfileNode : IGNodeController @end
 @interface IGSettingsNode : IGNodeController @end
-@interface IGCommentsNode : IGNodeController @end
+@interface IGCommentsNode : IGNodeController
+@property (nonatomic, strong) UIView *composerBar;
+@property (nonatomic, strong) UIScrollView *commentsScroll;
+@end
 @interface IGVideoNode : IGNodeController @end
+@interface IGSearchNode : IGNodeController
+@property (nonatomic, strong) UIView *tabUnderline;
+@property (nonatomic, strong) UIView *results;
+@property (nonatomic, assign) NSInteger selectedSearchTab;
+@end
 @interface IGPlaceholderNode : IGNodeController @end
 
 @interface IGPostSkeleton : UIView
@@ -111,9 +119,11 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     UIViewController *next = nil;
     if ([name isEqualToString:@"Comments"]) next = [IGCommentsNode new];
     else if ([name isEqualToString:@"Video"]) next = [IGVideoNode new];
+    else if ([name isEqualToString:@"Search"]) next = [IGSearchNode new];
     else if ([name isEqualToString:@"Options"]) next = [IGSettingsNode new];
     else next = [IGPlaceholderNode new];
     next.title = name;
+    if ([name isEqualToString:@"Comments"]) next.hidesBottomBarWhenPushed = YES;
     [self.navigationController pushViewController:next animated:YES];
 }
 - (UILabel *)label:(NSString *)text frame:(CGRect)frame size:(CGFloat)size color:(UIColor *)color bold:(BOOL)bold {
@@ -134,11 +144,9 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @implementation IGFeedNode
 - (void)viewDidLoad {
     [super viewDidLoad];
-    UILabel *logo = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 150, 38)];
-    logo.text = @"Instagram";
-    logo.textAlignment = NSTextAlignmentCenter;
-    logo.font = [UIFont fontWithName:@"Zapfino" size:19] ?: [UIFont italicSystemFontOfSize:22];
-    logo.textColor = UIColor.blackColor;
+    UIImageView *logo = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 103, 30)];
+    logo.contentMode = UIViewContentModeScaleAspectFit;
+    logo.image = [[UIImage imageNamed:@"logotype-feed"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
     self.navigationItem.titleView = logo;
 
     UIButton *inbox = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -168,11 +176,16 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    UIView *search = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 220, 32)];
+    UIControl *search = [[UIControl alloc] initWithFrame:CGRectMake(0, 0, 220, 32)];
     search.backgroundColor = IGColor(0xEFEFF1);
     search.layer.cornerRadius = 5;
-    [search addSubview:IGIconView(@"search", CGRectMake(8, 7, 18, 18), IGMuted(), NO)];
+    [search addTarget:self action:@selector(openSearch) forControlEvents:UIControlEventTouchUpInside];
+    UIImageView *magnifier = [[UIImageView alloc] initWithFrame:CGRectMake(8, 7, 18, 18)];
+    magnifier.contentMode = UIViewContentModeScaleAspectFit;
+    magnifier.image = [[UIImage imageNamed:@"searchbar-mag-glass"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    [search addSubview:magnifier];
     UILabel *searchText = [self label:@"Search" frame:CGRectMake(32, 0, 175, 32) size:15 color:IGMuted() bold:NO];
+    searchText.userInteractionEnabled = NO;
     [search addSubview:searchText];
     self.navigationItem.titleView = search;
 
@@ -213,6 +226,91 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     scroll.contentSize = CGSizeMake(self.view.bounds.size.width, y + ceil(count / 3.0) * tileWidth);
 }
 - (void)openReels { [self openNode:@"Video"]; }
+- (void)openSearch { [self openNode:@"Search"]; }
+@end
+
+@implementation IGSearchNode
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    CGFloat width = self.view.bounds.size.width;
+    UIView *searchField = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 220, 32)];
+    searchField.backgroundColor = IGColor(0xEFEFF1);
+    searchField.layer.cornerRadius = 5;
+    UIImageView *magnifier = [[UIImageView alloc] initWithFrame:CGRectMake(8, 7, 18, 18)];
+    magnifier.contentMode = UIViewContentModeScaleAspectFit;
+    magnifier.image = [[UIImage imageNamed:@"searchbar-mag-glass-on"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    [searchField addSubview:magnifier];
+    UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(32, 0, 180, 32)];
+    field.placeholder = @"Search places";
+    field.font = [UIFont systemFontOfSize:15];
+    [searchField addSubview:field];
+    self.navigationItem.titleView = searchField;
+    UIBarButtonItem *cancel = [[UIBarButtonItem alloc] initWithTitle:@"Cancel" style:UIBarButtonItemStylePlain target:self action:@selector(cancelSearch)];
+    self.navigationItem.rightBarButtonItem = cancel;
+
+    UIView *tabs = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 52)];
+    NSArray *titles = @[@"Top", @"People", @"Tags", @"Places"];
+    for (NSInteger i=0; i<titles.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame = CGRectMake(i*width/4, 0, width/4, 51);
+        button.tag = i;
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        [button setTitleColor:i == 3 ? UIColor.blackColor : IGMuted() forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:15];
+        [button addTarget:self action:@selector(selectSearchTab:) forControlEvents:UIControlEventTouchUpInside];
+        [tabs addSubview:button];
+    }
+    self.tabUnderline = [[UIView alloc] initWithFrame:CGRectMake(width*3/4, 50, width/4, 2)];
+    self.tabUnderline.backgroundColor = UIColor.blackColor;
+    [tabs addSubview:self.tabUnderline];
+    UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(0, 51.5, width, 0.5)];
+    divider.backgroundColor = IGLine();
+    [tabs addSubview:divider];
+    [self.view addSubview:tabs];
+
+    self.results = [[UIView alloc] initWithFrame:CGRectMake(0, 52, width, self.view.bounds.size.height-52)];
+    [self.view addSubview:self.results];
+    [self showPlacesResult];
+}
+- (void)showPlacesResult {
+    [self.results.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    CGFloat width = self.results.bounds.size.width;
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 64)];
+    UIImageView *pin = [[UIImageView alloc] initWithFrame:CGRectMake(22, 18, 24, 24)];
+    pin.contentMode = UIViewContentModeScaleAspectFit;
+    pin.image = [[UIImage imageNamed:@"search-location-filled"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    [row addSubview:pin];
+    UILabel *label = [self label:@"Near Current Location" frame:CGRectMake(68, 0, width-78, 64) size:16 color:IGBlue() bold:NO];
+    [row addSubview:label];
+    row.backgroundColor = IGColor(0xF5F5F7);
+    [self.results addSubview:row];
+}
+- (void)selectSearchTab:(UIButton *)sender {
+    self.selectedSearchTab = sender.tag;
+    CGFloat width = self.view.bounds.size.width;
+    [UIView animateWithDuration:0.18 animations:^{
+        self.tabUnderline.frame = CGRectMake(sender.tag*width/4, 50, width/4, 2);
+    }];
+    for (UIView *view in sender.superview.subviews) {
+        if ([view isKindOfClass:[UIButton class]]) {
+            UIButton *button = (UIButton *)view;
+            [button setTitleColor:button.tag == sender.tag ? UIColor.blackColor : IGMuted() forState:UIControlStateNormal];
+        }
+    }
+    if (sender.tag == 3) [self showPlacesResult];
+    else {
+        [self.results.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+        CGFloat width = self.results.bounds.size.width;
+        for (NSInteger i=0; i<5; i++) {
+            UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, i*62, width, 62)];
+            [row addSubview:IGSkeleton(CGRectMake(14, 9, 44, 44), 22)];
+            [row addSubview:IGSkeleton(CGRectMake(72, 18, width*0.46, 9), 4.5)];
+            [row addSubview:IGSkeleton(CGRectMake(72, 37, width*0.30, 7), 3.5)];
+            [self.results addSubview:row];
+        }
+    }
+}
+- (void)cancelSearch { [self.navigationController popViewControllerAnimated:YES]; }
 @end
 
 @implementation IGActivityNode
@@ -295,20 +393,72 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Options";
-    UIView *section = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 48)];
-    [section addSubview:[self label:@"FEED" frame:CGRectMake(16, 18, 200, 20) size:12 color:IGMuted() bold:YES]];
-    [self.view addSubview:section];
-    [self addDividerAtY:48];
-    [self.view addSubview:[self label:@"Show Reels in Explore" frame:CGRectMake(16, 61, 250, 28) size:15 color:UIColor.blackColor bold:NO]];
-    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectMake(self.view.bounds.size.width-66, 58, 51, 31)];
-    toggle.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+    CGFloat width = self.view.bounds.size.width;
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scroll];
+    CGFloat y = 0;
+
+    NSArray *sections = @[
+        @{@"title": @"FOLLOW PEOPLE", @"rows": @[@"Facebook Friends", @"Find Contacts", @"Invite Facebook Friends"]},
+        @{@"title": @"ACCOUNT", @"rows": @[@"Edit Profile", @"Change Password", @"Posts You've Liked", @"Two-Factor Authentication"]}
+    ];
+    for (NSDictionary *section in sections) {
+        UIView *heading = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
+        heading.backgroundColor = IGColor(0xFAFAFA);
+        [heading addSubview:[self label:section[@"title"] frame:CGRectMake(16, 16, width-32, 18) size:12 color:IGMuted() bold:YES]];
+        [scroll addSubview:heading];
+        y += 42;
+        for (NSString *title in section[@"rows"]) {
+            BOOL invite = [title hasPrefix:@"Invite"];
+            UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
+            UILabel *label = [self label:title frame:CGRectMake(16, 0, width-52, 54) size:15 color:invite ? IGColor(0x3F5F8A) : IGColor(0x262626) bold:NO];
+            label.center = CGPointMake(label.center.x, 27);
+            [row addSubview:label];
+            if (!invite) {
+                UIImageView *chevron = [[UIImageView alloc] initWithFrame:CGRectMake(width-32, 19, 12, 16)];
+                chevron.contentMode = UIViewContentModeScaleAspectFit;
+                chevron.image = [[UIImage imageNamed:@"chevron-settings"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+                [row addSubview:chevron];
+            }
+            [scroll addSubview:row];
+            y += 54;
+            UIView *line = [[UIView alloc] initWithFrame:CGRectMake(16, y, width-16, 0.5)];
+            line.backgroundColor = IGLine();
+            [scroll addSubview:line];
+        }
+        y += 18;
+    }
+
+    UIView *account = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 52)];
+    [account addSubview:[self label:@"Private Account" frame:CGRectMake(16, 0, width-90, 52) size:15 color:IGColor(0x262626) bold:NO]];
+    UISwitch *privateSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 10, 51, 31)];
+    privateSwitch.transform = CGAffineTransformMakeScale(0.9, 0.9);
+    [account addSubview:privateSwitch];
+    [scroll addSubview:account];
+    y += 52;
+    UILabel *privacyHint = [self label:@"When your account is private, only people you approve can see your photos and videos." frame:CGRectMake(16, y, width-32, 54) size:12 color:IGMuted() bold:NO];
+    privacyHint.numberOfLines = 3;
+    [scroll addSubview:privacyHint];
+    y += 72;
+
+    UIView *settingsHeader = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
+    settingsHeader.backgroundColor = IGColor(0xFAFAFA);
+    [settingsHeader addSubview:[self label:@"SETTINGS" frame:CGRectMake(16, 16, width-32, 18) size:12 color:IGMuted() bold:YES]];
+    [scroll addSubview:settingsHeader];
+    y += 42;
+    UIView *reelsRow = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
+    [reelsRow addSubview:[self label:@"Show Reels in Explore" frame:CGRectMake(16, 0, width-90, 54) size:15 color:IGColor(0x262626) bold:NO]];
+    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 11, 51, 31)];
+    toggle.transform = CGAffineTransformMakeScale(0.9, 0.9);
     toggle.on = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGShowReels"] == nil || [[NSUserDefaults standardUserDefaults] boolForKey:@"IGShowReels"];
     [toggle addTarget:self action:@selector(toggleReels:) forControlEvents:UIControlEventValueChanged];
-    [self.view addSubview:toggle];
-    [self addDividerAtY:100];
-    UILabel *hint = [self label:@"Hides the Reels shelf from Explore." frame:CGRectMake(16, 108, self.view.bounds.size.width-32, 42) size:12 color:IGMuted() bold:NO];
-    hint.numberOfLines = 2;
-    [self.view addSubview:hint];
+    [reelsRow addSubview:toggle];
+    [scroll addSubview:reelsRow];
+    y += 54;
+    UILabel *hint = [self label:@"Hides the Reels shelf from Explore." frame:CGRectMake(16, y, width-32, 34) size:12 color:IGMuted() bold:NO];
+    [scroll addSubview:hint];
+    scroll.contentSize = CGSizeMake(width, y+50);
 }
 - (void)toggleReels:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"IGShowReels"];
@@ -322,29 +472,111 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.title = @"Comments";
     CGFloat width = self.view.bounds.size.width;
     CGFloat y = 4;
+    CGFloat composerHeight = 48;
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 0, width, self.view.bounds.size.height-composerHeight)];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scroll];
+    self.commentsScroll = scroll;
     for (NSInteger i = 0; i < 8; i++) {
         UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 64)];
         [row addSubview:IGSkeleton(CGRectMake(14, 11, 40, 40), 20)];
         [row addSubview:IGSkeleton(CGRectMake(66, 13, width*0.38, 9), 4.5)];
         [row addSubview:IGSkeleton(CGRectMake(66, 31, width*0.66, 8), 4)];
-        [self.view addSubview:row];
+        [scroll addSubview:row];
         y += 64;
-        [self addDividerAtY:y];
+        UIView *line = [[UIView alloc] initWithFrame:CGRectMake(66, y, width-66, 0.5)];
+        line.backgroundColor = IGLine();
+        [scroll addSubview:line];
     }
+    scroll.contentSize = CGSizeMake(width, y);
+
+    UIView *composer = [[UIView alloc] initWithFrame:CGRectMake(0, self.view.bounds.size.height-composerHeight, width, composerHeight)];
+    composer.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleWidth;
+    composer.backgroundColor = UIColor.whiteColor;
+    UIView *topLine = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 0.5)];
+    topLine.backgroundColor = IGLine();
+    [composer addSubview:topLine];
+    UIImageView *share = IGIconView(@"share", CGRectMake(14, 10, 26, 26), IGMuted(), NO);
+    [composer addSubview:share];
+    UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(52, 4, width-112, 40)];
+    field.placeholder = @"Add a comment…";
+    field.font = [UIFont systemFontOfSize:15];
+    field.returnKeyType = UIReturnKeySend;
+    [composer addSubview:field];
+    UIButton *post = [UIButton buttonWithType:UIButtonTypeSystem];
+    post.frame = CGRectMake(width-58, 4, 52, 40);
+    [post setTitle:@"Post" forState:UIControlStateNormal];
+    post.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    [composer addSubview:post];
+    [self.view addSubview:composer];
+    self.composerBar = composer;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(keyboardFrameChanged:) name:UIKeyboardWillChangeFrameNotification object:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{ [field becomeFirstResponder]; });
 }
+- (void)keyboardFrameChanged:(NSNotification *)notification {
+    CGRect screenFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGRect keyboardFrame = [self.view convertRect:screenFrame fromView:nil];
+    CGFloat y = MAX(0, CGRectGetMinY(keyboardFrame)-CGRectGetHeight(self.composerBar.frame));
+    NSTimeInterval duration = [notification.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    [UIView animateWithDuration:duration animations:^{
+        CGRect composerFrame = self.composerBar.frame;
+        composerFrame.origin.y = y;
+        self.composerBar.frame = composerFrame;
+        CGRect scrollFrame = self.commentsScroll.frame;
+        scrollFrame.size.height = y;
+        self.commentsScroll.frame = scrollFrame;
+    }];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 @end
 
 @implementation IGVideoNode
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Reels";
-    UIView *media = IGSkeleton(self.view.bounds, 0);
-    media.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:media];
-    UIImageView *play = IGIconView(@"play", CGRectMake(0, 0, 54, 54), IGMuted(), NO);
-    play.center = self.view.center;
-    play.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    [self.view addSubview:play];
+    self.title = @"Video";
+    UIButton *refresh = [UIButton buttonWithType:UIButtonTypeCustom];
+    refresh.frame = CGRectMake(0, 0, 34, 34);
+    refresh.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    [refresh setImage:[[UIImage imageNamed:@"bar-button-refresh"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forState:UIControlStateNormal];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:refresh];
+
+    CGFloat width = self.view.bounds.size.width;
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scroll];
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 54)];
+    [header addSubview:IGSkeleton(CGRectMake(12, 8, 38, 38), 19)];
+    [header addSubview:IGSkeleton(CGRectMake(60, 15, MIN(width*0.46, 142), 10), 5)];
+    UIButton *more = [UIButton buttonWithType:UIButtonTypeCustom];
+    more.frame = CGRectMake(width-42, 10, 30, 30);
+    [more setImage:IGIconImage(@"more", UIColor.blackColor, 24, NO) forState:UIControlStateNormal];
+    [more addTarget:self action:@selector(showPostActions) forControlEvents:UIControlEventTouchUpInside];
+    [header addSubview:more];
+    [scroll addSubview:header];
+
+    CGFloat mediaHeight = width * 0.82;
+    [scroll addSubview:IGSkeleton(CGRectMake(0, 54, width, mediaHeight), 0)];
+    UIImageView *play = IGIconView(@"play", CGRectMake(0, 0, 44, 44), UIColor.whiteColor, NO);
+    play.center = CGPointMake(width/2, 54+mediaHeight/2);
+    [scroll addSubview:play];
+    UIView *actions = [[UIView alloc] initWithFrame:CGRectMake(0, 54+mediaHeight, width, 44)];
+    [actions addSubview:IGIconView(@"heart", CGRectMake(12, 8, 27, 27), UIColor.blackColor, NO)];
+    [actions addSubview:IGIconView(@"comment", CGRectMake(54, 8, 27, 27), UIColor.blackColor, NO)];
+    [actions addSubview:IGIconView(@"share", CGRectMake(96, 8, 27, 27), UIColor.blackColor, NO)];
+    [scroll addSubview:actions];
+    CGFloat y = CGRectGetMaxY(actions.frame)+14;
+    [scroll addSubview:IGSkeleton(CGRectMake(14, y, 84, 9), 4.5)];
+    [scroll addSubview:IGSkeleton(CGRectMake(14, y+24, width*0.76, 9), 4.5)];
+    [scroll addSubview:IGSkeleton(CGRectMake(14, y+42, width*0.55, 8), 4)];
+    scroll.contentSize = CGSizeMake(width, y+76);
+}
+- (void)showPostActions {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Edit" style:UIAlertActionStyleDefault handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Share" style:UIAlertActionStyleDefault handler:nil]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 @end
 
@@ -376,8 +608,9 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     root.title = title;
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:root];
     navigation.tabBarItem.title = @"";
-    navigation.tabBarItem.image = IGIconImage(icon, IGMuted(), 26, NO);
-    navigation.tabBarItem.selectedImage = IGIconImage(icon, UIColor.blackColor, 26, YES);
+    NSString *tabIcon = [@"tab-" stringByAppendingString:icon];
+    navigation.tabBarItem.image = IGIconImage(tabIcon, IGMuted(), 26, NO);
+    navigation.tabBarItem.selectedImage = IGIconImage(tabIcon, UIColor.blackColor, 26, YES);
     return navigation;
 }
 - (void)routeToComments {

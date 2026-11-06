@@ -1,6 +1,6 @@
 # Insta10
 
-An Objective-C UIKit interface prototype designed for iOS 10, with the iPhone 5s (320 × 568 pt) as the first layout target. Screens currently show neutral loading skeletons and do not sign in or contact Instagram.
+An Objective-C UIKit interface prototype designed for iOS 10, with the iPhone 5s (320 × 568 pt) as the first layout target. Its screen structure follows Instagram 10.29 (2016–2017); it uses the original asset catalog for Instagram glyphs and the wordmark. Screens currently show neutral loading skeletons and do not sign in or contact Instagram.
 
 ## Interface nodes
 
