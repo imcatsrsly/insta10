@@ -10,6 +10,8 @@ An Objective-C UIKit interface prototype designed for iOS 10, with the iPhone 5s
 - Profile and profile grid
 - Comments, Reels viewer, Options, and a placeholder node for later features
 - Reels shelf toggle in Options
+- Text demo mode (on by default) with `null` / zero placeholders and live switching
+- Reference-matched 2016 repost and Direct inbox glyphs; translucent tab bar
 - 4-inch launch image support so iPhone 5/5s use the full screen
 - Shared vector icons drawn in the iOS 10 line style
 
@@ -24,7 +26,7 @@ export THEOS="$HOME/theos"
 make package FINALPACKAGE=1
 ```
 
-The project uses the classic linker mode because the iOS 10 SDK has older `.tbd` stubs. After a pull request is merged to `main`, GitHub Actions builds a `.deb` and publishes it as a prerelease. Open the repository's Releases page and download the newest package. On a jailbroken iPhone, open the `.deb` in Filza or install it with `dpkg -i` and refresh the icon cache with `uicache`.
+The project uses the classic linker mode because the iOS 10 SDK has older `.tbd` stubs. Pushing to `main` triggers GitHub Actions, which builds the `.deb` and updates the stable [latest build](https://github.com/imcatsrsly/insta10/releases/download/latest/Insta10-latest.deb). On a jailbroken iPhone, open the `.deb` in Filza or install it with `dpkg -i` and refresh the icon cache with `uicache`.
 
 Pull requests run the build and attach the `.deb` as a workflow artifact, without publishing a release.
 

@@ -16,8 +16,8 @@ UIImage *IGIconImage(NSString *name, UIColor *color, CGFloat size, BOOL selected
         @"heart": selected ? @"tabbar-activity-icon-highlighted" : @"ufi-button-like",
         @"profile": selected ? @"tabbar-profile-icon-highlighted" : @"tabbar-profile-icon",
         @"comment": @"ufi-button-comment",
-        @"share": @"ufi-button-reshare",
-        @"inbox": @"direct-entry-point-off",
+        @"share": @"IGReshare",
+        @"inbox": @"IGDirectInbox",
         @"more": @"bar-button-more",
         @"grid": @"profile-grid",
         @"list": @"profile-list",
@@ -29,7 +29,11 @@ UIImage *IGIconImage(NSString *name, UIColor *color, CGFloat size, BOOL selected
     };
     NSString *assetName = assets[name];
     UIImage *asset = assetName ? [UIImage imageNamed:assetName] : nil;
-    if (asset) return [asset imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    if (asset) {
+        NSSet *templateAssets = [NSSet setWithArray:@[@"share", @"inbox", @"grid", @"list", @"pin", @"tagged"]];
+        UIImageRenderingMode mode = [templateAssets containsObject:name] ? UIImageRenderingModeAlwaysTemplate : UIImageRenderingModeAlwaysOriginal;
+        return [asset imageWithRenderingMode:mode];
+    }
 
     CGSize canvas = CGSizeMake(size, size);
     UIGraphicsBeginImageContextWithOptions(canvas, NO, 0);
