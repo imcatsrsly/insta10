@@ -1,0 +1,9 @@
+Package: com.imcatsrsly.insta10
+Name: Insta10
+Version: 0.1.0
+Architecture: iphoneos-arm
+Description: iOS 10 style Instagram client interface prototype
+Maintainer: imcatsrsly
+Author: imcatsrsly
+Section: Applications
+Depends: firmware (>= 10.0)
