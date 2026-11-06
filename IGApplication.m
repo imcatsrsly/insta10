@@ -1272,16 +1272,13 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     NSArray *glyphs = @[@"notification-toast-glyph-comments", @"notification-toast-glyph-likes", @"notification-toast-glyph-photosofyou"];
     NSMutableArray *items = [NSMutableArray array];
     UIFont *font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
-    CGFloat iconSize = 14.0, iconTextGap = 6.0, itemGap = 10.0, horizontalInset = 14.0;
-    CGFloat contentWidth = 0;
+    CGFloat iconSize = 14.0, iconTextGap = 4.0, itemGap = 6.0, horizontalInset = 14.0;
+    CGFloat cellWidth = 36.0;
     for (NSInteger i = 0; i < types.count; i++) {
         NSInteger count = IGUnreadEventCount(types[i]);
         if (count == 0) continue;
         NSString *text = count > 99 ? @"99+" : [NSString stringWithFormat:@"%ld", (long)count];
-        CGFloat textWidth = ceil([text sizeWithAttributes:@{NSFontAttributeName: font}].width);
-        CGFloat itemWidth = iconSize + iconTextGap + textWidth;
-        [items addObject:@{@"glyph": glyphs[i], @"text": text, @"width": @(itemWidth)}];
-        contentWidth += itemWidth;
+        [items addObject:@{@"glyph": glyphs[i], @"text": text}];
     }
     if (items.count == 0) {
         self.activitySummaryPopup.hidden = YES;
@@ -1293,19 +1290,16 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         return;
     }
 
-    contentWidth += itemGap * (items.count-1);
-    CGFloat screenWidth = self.view.bounds.size.width;
-    CGFloat width = MIN(contentWidth + horizontalInset*2.0, screenWidth-16.0);
+    // The tail is anchored to the activity tab. Give every event type a fixed
+    // cell so the bubble expands symmetrically without moving that anchor.
+    CGFloat width = horizontalInset*2.0 + cellWidth*items.count + itemGap*(items.count-1);
     CGFloat bodyHeight = 36.5, tailHeight = 11.5, totalHeight = bodyHeight + tailHeight;
-    CGFloat gapsWidth = itemGap*(items.count-1);
-    CGFloat itemWidths = contentWidth-gapsWidth;
-    CGFloat availableItemWidth = MAX(0, width-horizontalInset*2.0-gapsWidth);
-    CGFloat itemScale = itemWidths > availableItemWidth ? availableItemWidth/itemWidths : 1.0;
     self.activitySummaryPopup.hidden = !self.activitySummaryVisible;
     self.activitySummaryPopup.alpha = self.activitySummaryVisible ? 1 : 0;
     self.activitySummaryPopup.transform = self.activitySummaryVisible ? CGAffineTransformIdentity : CGAffineTransformMakeScale(0.92, 0.92);
     self.activitySummaryPopup.frame = CGRectMake(0, -totalHeight, width, totalHeight);
-    self.activitySummaryPopup.center = CGPointMake(3.5*(screenWidth/5.0), -totalHeight/2.0);
+    UIButton *activityButton = self.footerButtons[3];
+    self.activitySummaryPopup.center = CGPointMake(CGRectGetMidX(activityButton.frame), -totalHeight/2.0);
 
     CGFloat nubHalfWidth = 7.0;
     UIBezierPath *tailPath = [UIBezierPath bezierPath];
@@ -1336,25 +1330,29 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     body.shadowPath = bodyPath.CGPath;
     [self.activitySummaryPopup.layer addSublayer:body];
 
-    CGFloat drawnContentWidth = itemWidths*itemScale+gapsWidth;
-    CGFloat x = (width-drawnContentWidth)/2.0;
     CGFloat contentY = (bodyHeight-16.0)/2.0;
-    for (NSDictionary *item in items) {
-        CGFloat itemWidth = [item[@"width"] doubleValue]*itemScale;
+    for (NSInteger i = 0; i < items.count; i++) {
+        NSDictionary *item = items[i];
+        CGFloat cellX = horizontalInset + i*(cellWidth+itemGap);
+        CGFloat countWidth = MIN(cellWidth-iconSize-iconTextGap,
+                                 ceil([item[@"text"] sizeWithAttributes:@{NSFontAttributeName: font}].width));
+        CGFloat groupWidth = iconSize+iconTextGap+countWidth;
+        CGFloat x = cellX+(cellWidth-groupWidth)/2.0;
         UIImage *glyph = [[UIImage imageNamed:item[@"glyph"]] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(x, contentY+1.0, iconSize*itemScale, iconSize*itemScale)];
+        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectMake(x, contentY+1.0, iconSize, iconSize)];
         icon.contentMode = UIViewContentModeScaleAspectFit;
         icon.image = glyph;
         icon.tintColor = UIColor.whiteColor;
         [self.activitySummaryPopup addSubview:icon];
 
-        UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetMaxX(icon.frame)+iconTextGap*itemScale, contentY-1.0, itemWidth-iconSize*itemScale-iconTextGap*itemScale, 18.0)];
+        UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(CGRectGetMaxX(icon.frame)+iconTextGap, contentY-1.0, countWidth, 18.0)];
         count.font = font;
+        count.adjustsFontSizeToFitWidth = YES;
+        count.minimumScaleFactor = 0.72;
         count.textColor = UIColor.whiteColor;
         count.textAlignment = NSTextAlignmentLeft;
         count.text = item[@"text"];
         [self.activitySummaryPopup addSubview:count];
-        x += itemWidth + itemGap;
     }
 }
 - (void)updateFooterVisibility {
