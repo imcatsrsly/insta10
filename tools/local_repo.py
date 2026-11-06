@@ -107,8 +107,9 @@ def refresh(force: bool = False) -> str:
         _last_check = time.time()
         temp = POOL / "Insta10-latest.deb.tmp"
         POOL.mkdir(parents=True, exist_ok=True)
+        download_url = DOWNLOAD_URL + "?refresh=" + str(int(time.time()))
         subprocess.run(
-            ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), DOWNLOAD_URL],
+            ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), download_url],
             check=True,
         )
         try:
@@ -142,12 +143,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 error = f"<p class='error'>GitHub check failed: {html.escape(str(exc))}</p>"
             ip = os.environ.get("INSTA10_REPO_HOST")
             if not ip:
-                probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 try:
-                    probe.connect(("1.1.1.1", 80))
-                    ip = probe.getsockname()[0]
-                finally:
-                    probe.close()
+                    interface = subprocess.run(["/sbin/ifconfig", "en0"], check=True, capture_output=True, text=True).stdout
+                    ip = next(line.split()[1] for line in interface.splitlines() if line.strip().startswith("inet "))
+                except (OSError, subprocess.CalledProcessError, StopIteration):
+                    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        probe.connect(("1.1.1.1", 80))
+                        ip = probe.getsockname()[0]
+                    finally:
+                        probe.close()
             source = f"http://{ip}:{PORT}/"
             page = f"""<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Insta10 updates</title>
 <style>body{{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f4f4f7;color:#222;margin:0;padding:24px}}main{{max-width:520px;margin:8vh auto;background:white;border-radius:16px;padding:24px;box-shadow:0 6px 24px #0001}}h1{{margin-top:0}}button,a.btn{{display:block;box-sizing:border-box;width:100%;padding:15px;border:0;border-radius:10px;background:#3897f0;color:white;text-align:center;font:600 16px inherit;text-decoration:none;margin:14px 0}}small,.muted{{color:#777}}code{{word-break:break-all}}.error{{color:#b00}}</style>
