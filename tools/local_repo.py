@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small LAN APT source for Insta10; serves the latest GitHub release."""
+"""Small LAN APT source and one-click local builder for Insta10."""
 from __future__ import annotations
 
 import gzip
@@ -7,12 +7,12 @@ import hashlib
 import html
 import http.server
 import io
-import json
 import os
 import tarfile
 import threading
 import socket
 import subprocess
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,11 +24,8 @@ POOL = DATA / "pool/main/i/insta10"
 PACKAGES_PATH = DATA / "dists/stable/main/binary-iphoneos-arm/Packages"
 PACKAGES_GZ_PATH = PACKAGES_PATH.with_suffix(".gz")
 RELEASE_PATH = DATA / "dists/stable/Release"
-DOWNLOAD_URL = "https://github.com/imcatsrsly/insta10/releases/download/latest/Insta10-latest.deb"
 PORT = int(os.environ.get("INSTA10_REPO_PORT", "8890"))
-CHECK_INTERVAL = 10
 _lock = threading.Lock()
-_last_check = 0.0
 _package_version = "not loaded"
 
 
@@ -115,66 +112,58 @@ def write_repo(deb: Path) -> None:
     (DATA / "Release").write_text(flat_release)
 
 
-def refresh(force: bool = False) -> str:
-    global _last_check
+def current_package() -> Path:
+    packages = sorted(POOL.glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if not packages:
+        raise FileNotFoundError("В локальном репозитории пока нет .deb")
+    return packages[0]
+
+
+def build_local() -> str:
     with _lock:
-        if not force and time.time() - _last_check < CHECK_INTERVAL:
-            return _package_version
-        _last_check = time.time()
-        temp = POOL / "Insta10-latest.deb.tmp"
+        env = os.environ.copy()
+        env["THEOS"] = env.get("THEOS", str(Path.home() / "theos"))
+        result = subprocess.run(
+            ["/usr/bin/make", "clean", "package", "FINALPACKAGE=1"],
+            cwd=ROOT, env=env, capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode:
+            detail = (result.stderr or result.stdout)[-3000:]
+            raise RuntimeError("Сборка не прошла:\n" + detail)
+        candidates = sorted((ROOT / "packages").glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
+        if not candidates:
+            raise FileNotFoundError("Сборка завершилась, но .deb не найден")
+        built = candidates[0]
+        fields = package_control(built)
+        if fields.get("Package") != "com.imcatsrsly.insta10":
+            raise ValueError("Полученный .deb не похож на пакет Insta10")
+        version = fields.get("Version", "unknown")
         POOL.mkdir(parents=True, exist_ok=True)
-        download_url = DOWNLOAD_URL + "?refresh=" + str(int(time.time()))
-        try:
-            subprocess.run(
-                ["/usr/bin/curl", "--fail", "--location", "--silent", "--show-error", "--max-time", "60", "--output", str(temp), download_url],
-                check=True,
-            )
-        except Exception:
-            temp.unlink(missing_ok=True)
-            raise
-        try:
-            fields = package_control(temp)
-            if fields.get("Package") != "com.imcatsrsly.insta10":
-                raise ValueError("GitHub latest asset is not the Insta10 package")
-            version = fields.get("Version", "unknown")
-            final = POOL / f"insta10_{version}_iphoneos-arm.deb"
-            temp.replace(final)
-            # Keep one package in the repo so apt sees the newest version only.
-            for old in POOL.glob("*.deb"):
-                if old != final:
-                    old.unlink()
-            write_repo(final)
-            return version
-        finally:
-            temp.unlink(missing_ok=True)
+        final = POOL / f"insta10_{version}_iphoneos-arm.deb"
+        if built.resolve() != final.resolve():
+            shutil.copy2(built, final)
+        for old in POOL.glob("*.deb"):
+            if old != final:
+                old.unlink()
+        write_repo(final)
+        return version
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DATA), **kwargs)
 
-    def refresh_for_index(self):
-        path = self.path.split("?", 1)[0]
-        if path in ("/Packages", "/Packages.gz", "/Packages.xz", "/Packages.bz2", "/Packages.lzma", "/Release", "/dists/stable/Release", "/dists/stable/main/binary-iphoneos-arm/Packages", "/dists/stable/main/binary-iphoneos-arm/Packages.gz"):
-            try:
-                refresh()
-            except Exception as exc:
-                # Keep serving the last cached package if GitHub is temporarily unreachable.
-                print(f"GitHub sync skipped; serving cached { _package_version }: {exc}", flush=True)
-
     def do_HEAD(self):
-        self.refresh_for_index()
         return super().do_HEAD()
 
     def do_GET(self):
-        self.refresh_for_index()
         if self.path in ("/", "/index.html"):
             try:
-                version = refresh()
+                version = package_control(current_package()).get("Version", "unknown")
                 error = ""
             except Exception as exc:
                 version = _package_version
-                error = f"<p class='error'>GitHub check failed: {html.escape(str(exc))}</p>"
+                error = f"<p class='error'>{html.escape(str(exc))}</p>"
             ip = os.environ.get("INSTA10_REPO_HOST")
             if not ip:
                 try:
@@ -191,10 +180,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             page = f"""<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1"><title>Insta10 updates</title>
 <style>body{{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f4f4f7;color:#222;margin:0;padding:24px}}main{{max-width:520px;margin:8vh auto;background:white;border-radius:16px;padding:24px;box-shadow:0 6px 24px #0001}}h1{{margin-top:0}}button,a.btn{{display:block;box-sizing:border-box;width:100%;padding:15px;border:0;border-radius:10px;background:#3897f0;color:white;text-align:center;font:600 16px inherit;text-decoration:none;margin:14px 0}}small,.muted{{color:#777}}code{{word-break:break-all}}.error{{color:#b00}}</style>
 <main><h1>Insta10 · локальные обновления</h1><p>В репозитории сейчас версия <b>{html.escape(version)}</b>.</p>{error}
-<form method="post" action="/refresh"><button>Проверить GitHub и обновить репозиторий</button></form>
+<form method="post" action="/build"><button>Собрать и обновить локальный репозиторий</button></form>
 <a class="btn" href="zbra://sources/add/{html.escape(source)}">Добавить источник в Zebra</a>
 <p>Источник Zebra: <code>{html.escape(source)}</code></p>
-<p class="muted"><b>Добавить источник нужно только один раз.</b> Если Insta10 уже виден в Sources в Zebra, эту кнопку больше не нажимай. Новая сборка синхронизируется с GitHub при следующем обновлении источника в Zebra; затем нажми Upgrade у Insta10. Удалять приложение не нужно. Верхняя кнопка нужна только для ручной синхронизации с GitHub.</p>
+<p class="muted"><b>Источник Zebra добавляется один раз.</b> Для новой сборки нажми верхнюю кнопку. После сообщения об успехе обнови список пакетов в Zebra и нажми Upgrade у Insta10. Mac должен быть включён, а эта страница — доступна по Wi‑Fi.</p>
 <p><a href="/pool/main/i/insta10/">Список deb-файлов</a></p></main>"""
             body = page.encode()
             self.send_response(200)
@@ -206,15 +195,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        if self.path == "/refresh":
+        if self.path == "/build":
             try:
-                version = refresh(force=True)
+                version = build_local()
                 self.send_response(303)
-                self.send_header("Location", "/?updated=" + version)
+                self.send_header("Location", "/?built=" + version)
                 self.end_headers()
             except Exception as exc:
-                body = ("Update failed: " + str(exc)).encode()
-                self.send_error(502, body.decode())
+                body = ("Local build failed: " + str(exc)).encode()
+                self.send_error(500, body.decode())
             return
         self.send_error(404)
 
@@ -223,17 +212,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    try:
-        version = refresh(force=True)
-        print(f"Loaded Insta10 {version} from GitHub", flush=True)
-    except Exception as exc:
-        cached = sorted(POOL.glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
-        if not cached:
-            print(f"GitHub sync failed and there is no cached package: {exc}", flush=True)
-            raise
-        _, version = make_index(cached[0])
-        write_repo(cached[0])
-        print(f"GitHub is unavailable; serving cached Insta10 {version}", flush=True)
+    cached = sorted(POOL.glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if not cached:
+        packages = sorted((ROOT / "packages").glob("*.deb"), key=lambda item: item.stat().st_mtime, reverse=True)
+        if packages:
+            cached = packages[:1]
+            POOL.mkdir(parents=True, exist_ok=True)
+            target = POOL / packages[0].name
+            packages[0].replace(target)
+            cached = [target]
+    if not cached:
+        raise FileNotFoundError("Build Insta10 first; no local .deb was found")
+    _, version = make_index(cached[0])
+    write_repo(cached[0])
+    print(f"Serving local Insta10 {version}", flush=True)
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Insta10 repo listening on port {PORT}; open http://<Mac-IP>:{PORT}/ on the iPhone", flush=True)
     print("Keep this process running while using the local Zebra source. Ctrl+C stops it.", flush=True)

@@ -30,9 +30,7 @@ export THEOS="$HOME/theos"
 make package FINALPACKAGE=1
 ```
 
-The project uses the classic linker mode because the iOS 10 SDK has older `.tbd` stubs. Pushing to `main` triggers GitHub Actions, which builds the `.deb` and updates the stable [latest build](https://github.com/imcatsrsly/insta10/releases/download/latest/Insta10-latest.deb). On a jailbroken iPhone, open the `.deb` in Filza or install it with `dpkg -i` and refresh the icon cache with `uicache`.
-
-Pull requests run the build and attach the `.deb` as a workflow artifact, without publishing a release.
+The project uses the classic linker mode because the iOS 10 SDK has older `.tbd` stubs. Builds and packages stay on the Mac; GitHub is only the source backup. Increment `Version` in `control` for each app update, then press **Собрать и обновить локальный репозиторий** on the local updates page. Zebra reads the new `.deb` from the Mac over Wi-Fi.
 
 ## Next
 
@@ -49,4 +47,4 @@ Keep the Mac and iPhone on the same Wi-Fi network. Start the local source from t
 python3 tools/local_repo.py
 ```
 
-Open `http://<Mac-IP>:8890/` on the iPhone. The page can add the APT source to Zebra and has an optional manual sync button. Add the source once. On every later Zebra source refresh, the Mac server automatically synchronizes the `latest` GitHub release before returning the package index; then use **Upgrade** for Insta10. A package `postinst` refreshes the Home Screen registration, so manually running `uicache` or respringing should not be needed. The local source works only while this server is running and both devices can reach the Mac.
+Open `http://<Mac-IP>:8890/` on the iPhone. Add the Zebra source once. For each new version, press the build button on that page, then refresh Zebra's package list and press **Upgrade** for Insta10. A package `postinst` refreshes the Home Screen registration, so manually running `uicache` or respringing should not be needed. The local source works only while the server is running and both devices can reach the Mac.
