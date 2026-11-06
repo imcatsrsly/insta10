@@ -12,9 +12,67 @@ static UIColor *IGLine(void) { return IGColor(0xDBDBDB); }
 static UIColor *IGMuted(void) { return IGColor(0x999999); }
 static UIColor *IGSkeletonColor(void) { return IGColor(0xE8E8E8); }
 static NSString * const IGTextModeDidChangeNotification = @"IGTextModeDidChange";
+static NSString * const IGTestEventsDidChangeNotification = @"IGTestEventsDidChange";
+static NSString * const IGSettingsDidChangeNotification = @"IGSettingsDidChange";
+static NSString * const IGTestEventsKey = @"IGTestEvents";
 static BOOL IGTextDemoEnabled(void) {
     id value = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGTextDemoMode"];
     return value == nil || [value boolValue];
+}
+static NSArray *IGTestEvents(void) {
+    return [[NSUserDefaults standardUserDefaults] arrayForKey:IGTestEventsKey] ?: @[];
+}
+static NSArray *IGSortedTestEvents(NSString *type) {
+    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
+        return !type || [event[@"type"] isEqualToString:type];
+    }];
+    NSArray *filtered = [IGTestEvents() filteredArrayUsingPredicate:predicate];
+    return [filtered sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"date"] compare:b[@"date"]];
+    }];
+}
+static NSInteger IGTestEventCount(NSString *type) {
+    return [IGSortedTestEvents(type) count];
+}
+static NSInteger IGUnreadLikeCount(void) {
+    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
+        return [event[@"type"] isEqualToString:@"like"] && ![event[@"read"] boolValue];
+    }];
+    return [[IGTestEvents() filteredArrayUsingPredicate:predicate] count];
+}
+static NSInteger IGUnreadMessageCount(void) {
+    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(NSDictionary *event, NSDictionary *bindings) {
+        return [event[@"type"] isEqualToString:@"message"] && ![event[@"read"] boolValue];
+    }];
+    return [[IGTestEvents() filteredArrayUsingPredicate:predicate] count];
+}
+static void IGAddTestEvent(NSString *type, NSString *text) {
+    NSMutableArray *events = [IGTestEvents() mutableCopy];
+    [events addObject:@{@"type": type, @"text": text ?: @"", @"date": @([[NSDate date] timeIntervalSince1970]), @"read": @NO}];
+    [[NSUserDefaults standardUserDefaults] setObject:events forKey:IGTestEventsKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
+}
+static void IGMarkTestEventsRead(NSString *type) {
+    NSMutableArray *events = [NSMutableArray array];
+    BOOL changed = NO;
+    for (NSDictionary *event in IGTestEvents()) {
+        NSMutableDictionary *copy = [event mutableCopy];
+        BOOL matches = !type || [event[@"type"] isEqualToString:type] ||
+            ([type isEqualToString:@"activity"] && ([event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]));
+        if (matches && ![event[@"read"] boolValue]) { copy[@"read"] = @YES; changed = YES; }
+        [events addObject:copy];
+    }
+    if (changed) {
+        [[NSUserDefaults standardUserDefaults] setObject:events forKey:IGTestEventsKey];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
+    }
+}
+static void IGClearTestEvents(void) {
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:IGTestEventsKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGTestEventsDidChangeNotification object:nil];
 }
 
 static UIView *IGSkeleton(CGRect frame, CGFloat radius) {
@@ -50,7 +108,10 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @property (nonatomic, strong) UIScrollView *feedScroll;
 - (void)rebuildFeed;
 @end
-@interface IGExploreNode : IGNodeController @end
+@interface IGExploreNode : IGNodeController
+@property (nonatomic, strong) UIScrollView *exploreScroll;
+- (void)renderExplore;
+@end
 @interface IGActivityNode : IGNodeController
 @property (nonatomic, strong) UIScrollView *activityScroll;
 - (void)renderActivity;
@@ -58,13 +119,34 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 @interface IGProfileNode : IGNodeController
 - (void)renderProfile;
 @end
-@interface IGSettingsNode : IGNodeController @end
+@interface IGSettingsNode : IGNodeController
+@property (nonatomic, assign) NSInteger selectedSection;
+@property (nonatomic, assign) NSInteger selectedDevTab;
+- (void)renderSettings;
+- (void)selectSettingsTab:(UIButton *)sender;
+- (void)selectDevTab:(UIButton *)sender;
+- (CGFloat)addOptionRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y;
+- (CGFloat)addDevRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y;
+- (void)triggerMessage;
+- (void)triggerLike;
+- (void)triggerFollower;
+- (void)clearTestEvents;
+@end
 @interface IGCommentsNode : IGNodeController
 @property (nonatomic, strong) UIView *composerBar;
 @property (nonatomic, strong) UIScrollView *commentsScroll;
 - (void)renderComments;
 @end
 @interface IGVideoNode : IGNodeController @end
+@interface IGInboxNode : IGNodeController
+@property (nonatomic, strong) UIScrollView *inboxScroll;
+- (void)renderInbox;
+- (void)openConversation;
+@end
+@interface IGConversationNode : IGNodeController
+@property (nonatomic, strong) UIScrollView *conversationScroll;
+- (void)renderConversation;
+@end
 @interface IGSearchNode : IGNodeController
 @property (nonatomic, strong) UIView *tabUnderline;
 @property (nonatomic, strong) UIView *results;
@@ -115,7 +197,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         y += 42;
         if (IGTextDemoEnabled()) {
             UILabel *likes = [[UILabel alloc] initWithFrame:CGRectMake(14, y, width-28, 21)];
-            likes.text = @"0 likes";
+            likes.text = [NSString stringWithFormat:@"%ld likes", (long)IGTestEventCount(@"like")];
             likes.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
             likes.textColor = UIColor.blackColor;
             [self addSubview:likes];
@@ -165,9 +247,11 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     else if ([name isEqualToString:@"Video"]) next = [IGVideoNode new];
     else if ([name isEqualToString:@"Search"]) next = [IGSearchNode new];
     else if ([name isEqualToString:@"Options"]) next = [IGSettingsNode new];
+    else if ([name isEqualToString:@"Messages"]) next = [IGInboxNode new];
     else next = [IGPlaceholderNode new];
     next.title = name;
     if ([name isEqualToString:@"Comments"]) next.hidesBottomBarWhenPushed = YES;
+    if ([name isEqualToString:@"Messages"]) next.hidesBottomBarWhenPushed = YES;
     [self.navigationController pushViewController:next animated:YES];
 }
 - (UILabel *)label:(NSString *)text frame:(CGRect)frame size:(CGFloat)size color:(UIColor *)color bold:(BOOL)bold {
@@ -205,6 +289,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     [self.view addSubview:scroll];
     self.feedScroll = scroll;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(textModeChanged) name:IGTextModeDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(rebuildFeed) name:IGTestEventsDidChangeNotification object:nil];
     [self rebuildFeed];
 }
 - (void)rebuildFeed {
@@ -250,10 +335,16 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
     scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:scroll];
+    self.exploreScroll = scroll;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderExplore) name:IGSettingsDidChangeNotification object:nil];
+    [self renderExplore];
+}
+- (void)renderExplore {
+    [self.exploreScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    CGFloat width = self.view.bounds.size.width;
     CGFloat y = 0;
     BOOL showReels = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGShowReels"] == nil || [[NSUserDefaults standardUserDefaults] boolForKey:@"IGShowReels"];
     if (showReels) {
-        CGFloat width = self.view.bounds.size.width;
         UIButton *reels = [UIButton buttonWithType:UIButtonTypeCustom];
         reels.frame = CGRectMake(0, 0, width, 180);
         UIView *media = IGSkeleton(reels.bounds, 0);
@@ -263,21 +354,22 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         [reels addSubview:label];
         [reels addSubview:IGSkeleton(CGRectMake(14, 137, MIN(220, width-28), 12), 6)];
         [reels addTarget:self action:@selector(openReels) forControlEvents:UIControlEventTouchUpInside];
-        [scroll addSubview:reels];
+        [self.exploreScroll addSubview:reels];
         y = CGRectGetMaxY(reels.frame);
     }
 
-    CGFloat tileWidth = self.view.bounds.size.width / 3.0;
+    CGFloat tileWidth = width / 3.0;
     NSInteger count = 18;
     for (NSInteger i = 0; i < count; i++) {
         NSInteger row = i / 3;
         NSInteger column = i % 3;
         CGRect frame = CGRectMake(column * tileWidth + 1, y + row * tileWidth + 1, tileWidth - 2, tileWidth - 2);
         UIView *tile = IGSkeleton(frame, 0);
-        [scroll addSubview:tile];
+        [self.exploreScroll addSubview:tile];
     }
-    scroll.contentSize = CGSizeMake(self.view.bounds.size.width, y + ceil(count / 3.0) * tileWidth);
+    self.exploreScroll.contentSize = CGSizeMake(width, y + ceil(count / 3.0) * tileWidth);
 }
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 - (void)openReels { [self openNode:@"Video"]; }
 - (void)openSearch { [self openNode:@"Search"]; }
 @end
@@ -375,23 +467,52 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     [self.view addSubview:scroll];
     self.activityScroll = scroll;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderActivity) name:IGTextModeDidChangeNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderActivity) name:IGTestEventsDidChangeNotification object:nil];
+    [self renderActivity];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    IGMarkTestEventsRead(@"activity");
     [self renderActivity];
 }
 - (void)renderActivity {
     [self.activityScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     CGFloat width = self.view.bounds.size.width;
     CGFloat y = 6;
-    for (NSInteger i = 0; i < 8; i++) {
+    NSMutableArray *activityEvents = [NSMutableArray array];
+    for (NSDictionary *event in IGSortedTestEvents(nil)) {
+        if ([event[@"type"] isEqualToString:@"like"] || [event[@"type"] isEqualToString:@"follow"]) [activityEvents addObject:event];
+    }
+    NSArray *visibleEvents = [[activityEvents reverseObjectEnumerator] allObjects];
+    NSInteger rowCount = visibleEvents.count ? MIN(visibleEvents.count, 20) : 8;
+    for (NSInteger i = 0; i < rowCount; i++) {
         UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 68)];
         [row addSubview:IGSkeleton(CGRectMake(14, 10, 46, 46), 23)];
-        if (IGTextDemoEnabled()) {
+        if (visibleEvents.count) {
+            NSDictionary *event = visibleEvents[i];
+            NSString *action = [event[@"type"] isEqualToString:@"like"] ? @"liked your photo" : @"started following you";
+            NSString *message = [NSString stringWithFormat:@"null %@", action];
+            UILabel *label = [self label:message frame:CGRectMake(72, 11, width-132, 42) size:14 color:UIColor.blackColor bold:NO];
+            label.numberOfLines = 2;
+            [row addSubview:label];
+            [row addSubview:[self label:@"now" frame:CGRectMake(width-49, 11, 38, 18) size:12 color:IGMuted() bold:NO]];
+            if ([event[@"type"] isEqualToString:@"like"]) [row addSubview:IGSkeleton(CGRectMake(width-56, 35, 42, 28), 1)];
+            else {
+                UIButton *followBack = [UIButton buttonWithType:UIButtonTypeSystem];
+                followBack.frame = CGRectMake(width-82, 34, 68, 28);
+                [followBack setTitle:@"Follow" forState:UIControlStateNormal];
+                followBack.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+                [row addSubview:followBack];
+            }
+        } else if (IGTextDemoEnabled()) {
             [row addSubview:[self label:@"null" frame:CGRectMake(72, 10, width-140, 20) size:14 color:UIColor.blackColor bold:YES]];
             [row addSubview:[self label:@"0 likes" frame:CGRectMake(72, 31, width-140, 20) size:13 color:IGMuted() bold:NO]];
+            [row addSubview:IGSkeleton(CGRectMake(width-56, 11, 42, 42), 1)];
         } else {
             [row addSubview:IGSkeleton(CGRectMake(72, 14, width * 0.51, 9), 4.5)];
             [row addSubview:IGSkeleton(CGRectMake(72, 32, width * 0.35, 8), 4)];
+            [row addSubview:IGSkeleton(CGRectMake(width-56, 11, 42, 42), 1)];
         }
-        [row addSubview:IGSkeleton(CGRectMake(width-56, 11, 42, 42), 1)];
         [self.activityScroll addSubview:row];
         y += 68;
         UIView *line = [[UIView alloc] initWithFrame:CGRectMake(72, y, width-72, 0.5)];
@@ -413,6 +534,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithCustomView:settings];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderProfile) name:IGTextModeDidChangeNotification object:nil];
     [self renderProfile];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderProfile) name:IGTestEventsDidChangeNotification object:nil];
 }
 - (void)renderProfile {
     [self.view.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
@@ -440,7 +562,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         CGFloat x = statsX + i * statsWidth;
         if (textMode) {
             UILabel *count = [[UILabel alloc] initWithFrame:CGRectMake(x, 20, statsWidth, 25)];
-            count.text = @"0";
+            count.text = [NSString stringWithFormat:@"%ld", (long)(i == 1 ? IGTestEventCount(@"follow") : 0)];
             count.textAlignment = NSTextAlignmentCenter;
             count.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
             count.textColor = UIColor.blackColor;
@@ -507,15 +629,53 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Options";
+    self.selectedSection = 0;
+    self.selectedDevTab = 0;
+    [self renderSettings];
+}
+- (void)renderSettings {
+    [self.view.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
     CGFloat width = self.view.bounds.size.width;
-    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    UIView *tabs = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 44)];
+    NSArray *titles = @[@"OPTIONS", @"DEV"];
+    for (NSInteger i = 0; i < titles.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame = CGRectMake(i * width/2, 0, width/2, 43);
+        button.tag = i;
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        [button setTitleColor:i == self.selectedSection ? UIColor.blackColor : IGMuted() forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:14 weight:i == self.selectedSection ? UIFontWeightSemibold : UIFontWeightRegular];
+        [button addTarget:self action:@selector(selectSettingsTab:) forControlEvents:UIControlEventTouchUpInside];
+        [tabs addSubview:button];
+    }
+    UIView *underline = [[UIView alloc] initWithFrame:CGRectMake(self.selectedSection * width/2, 42, width/2, 2)];
+    underline.backgroundColor = UIColor.blackColor;
+    [tabs addSubview:underline];
+    UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(0, 43.5, width, 0.5)];
+    divider.backgroundColor = IGLine();
+    [tabs addSubview:divider];
+    [self.view addSubview:tabs];
+
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 44, width, self.view.bounds.size.height-44)];
     scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:scroll];
-    CGFloat y = 0;
-
+    CGFloat contentY = self.selectedSection == 0
+        ? [self addOptionRowsTo:scroll width:width startY:0]
+        : [self addDevRowsTo:scroll width:width startY:0];
+    scroll.contentSize = CGSizeMake(width, contentY + 16);
+}
+- (void)selectSettingsTab:(UIButton *)sender {
+    self.selectedSection = sender.tag;
+    [self renderSettings];
+}
+- (void)selectDevTab:(UIButton *)sender {
+    self.selectedDevTab = sender.tag;
+    [self renderSettings];
+}
+- (CGFloat)addOptionRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y {
     NSArray *sections = @[
-        @{@"title": @"FOLLOW PEOPLE", @"rows": @[@"Facebook Friends", @"Find Contacts", @"Invite Facebook Friends"]},
-        @{@"title": @"ACCOUNT", @"rows": @[@"Edit Profile", @"Change Password", @"Posts You've Liked", @"Two-Factor Authentication"]}
+        @{ @"title": @"FOLLOW PEOPLE", @"rows": @[@"Facebook Friends", @"Find Contacts", @"Invite Facebook Friends"] },
+        @{ @"title": @"ACCOUNT", @"rows": @[@"Edit Profile", @"Change Password", @"Posts You've Liked", @"Two-Factor Authentication"] }
     ];
     for (NSDictionary *section in sections) {
         UIView *heading = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
@@ -526,9 +686,7 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         for (NSString *title in section[@"rows"]) {
             BOOL invite = [title hasPrefix:@"Invite"];
             UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
-            UILabel *label = [self label:title frame:CGRectMake(16, 0, width-52, 54) size:15 color:invite ? IGColor(0x3F5F8A) : IGColor(0x262626) bold:NO];
-            label.center = CGPointMake(label.center.x, 27);
-            [row addSubview:label];
+            [row addSubview:[self label:title frame:CGRectMake(16, 0, width-52, 54) size:15 color:invite ? IGColor(0x3F5F8A) : IGColor(0x262626) bold:NO]];
             if (!invite) {
                 UIImageView *chevron = [[UIImageView alloc] initWithFrame:CGRectMake(width-32, 19, 12, 16)];
                 chevron.contentMode = UIViewContentModeScaleAspectFit;
@@ -543,7 +701,6 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         }
         y += 18;
     }
-
     UIView *account = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 52)];
     [account addSubview:[self label:@"Private Account" frame:CGRectMake(16, 0, width-90, 52) size:15 color:IGColor(0x262626) bold:NO]];
     UISwitch *privateSwitch = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 10, 51, 31)];
@@ -551,50 +708,216 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
     [account addSubview:privateSwitch];
     [scroll addSubview:account];
     y += 52;
-    UILabel *privacyHint = [self label:@"When your account is private, only people you approve can see your photos and videos." frame:CGRectMake(16, y, width-32, 54) size:12 color:IGMuted() bold:NO];
-    privacyHint.numberOfLines = 3;
-    [scroll addSubview:privacyHint];
-    y += 72;
-
-    UIView *settingsHeader = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
-    settingsHeader.backgroundColor = IGColor(0xFAFAFA);
-    [settingsHeader addSubview:[self label:@"SETTINGS" frame:CGRectMake(16, 16, width-32, 18) size:12 color:IGMuted() bold:YES]];
-    [scroll addSubview:settingsHeader];
-    y += 42;
-    UIView *reelsRow = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
-    [reelsRow addSubview:[self label:@"Show Reels in Explore" frame:CGRectMake(16, 0, width-90, 54) size:15 color:IGColor(0x262626) bold:NO]];
-    UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 11, 51, 31)];
-    toggle.transform = CGAffineTransformMakeScale(0.9, 0.9);
-    toggle.on = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGShowReels"] == nil || [[NSUserDefaults standardUserDefaults] boolForKey:@"IGShowReels"];
-    [toggle addTarget:self action:@selector(toggleReels:) forControlEvents:UIControlEventValueChanged];
-    [reelsRow addSubview:toggle];
-    [scroll addSubview:reelsRow];
-    y += 54;
-    UILabel *hint = [self label:@"Hides the Reels shelf from Explore." frame:CGRectMake(16, y, width-32, 34) size:12 color:IGMuted() bold:NO];
+    UILabel *hint = [self label:@"When your account is private, only people you approve can see your photos and videos." frame:CGRectMake(16, y, width-32, 54) size:12 color:IGMuted() bold:NO];
+    hint.numberOfLines = 3;
     [scroll addSubview:hint];
-    y += 38;
-    UIView *textModeRow = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
-    [textModeRow addSubview:[self label:@"Text demo mode" frame:CGRectMake(16, 0, width-90, 54) size:15 color:IGColor(0x262626) bold:NO]];
-    UISwitch *textMode = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 11, 51, 31)];
-    textMode.transform = CGAffineTransformMakeScale(0.9, 0.9);
-    textMode.on = IGTextDemoEnabled();
-    [textMode addTarget:self action:@selector(toggleTextMode:) forControlEvents:UIControlEventValueChanged];
-    [textModeRow addSubview:textMode];
-    [scroll addSubview:textModeRow];
-    y += 54;
-    UILabel *textModeHint = [self label:@"Shows null and zero placeholders instead of text skeletons." frame:CGRectMake(16, y, width-32, 34) size:12 color:IGMuted() bold:NO];
-    textModeHint.numberOfLines = 2;
-    [scroll addSubview:textModeHint];
-    scroll.contentSize = CGSizeMake(width, y+42);
+    return y + 72;
+}
+- (CGFloat)addDevRowsTo:(UIScrollView *)scroll width:(CGFloat)width startY:(CGFloat)y {
+    UIView *tabs = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 40)];
+    NSArray *titles = @[@"CONTROLS", @"TRIGGERS"];
+    for (NSInteger i = 0; i < titles.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame = CGRectMake(i * width/2, 0, width/2, 39);
+        button.tag = i;
+        [button setTitle:titles[i] forState:UIControlStateNormal];
+        [button setTitleColor:i == self.selectedDevTab ? IGBlue() : IGMuted() forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+        [button addTarget:self action:@selector(selectDevTab:) forControlEvents:UIControlEventTouchUpInside];
+        [tabs addSubview:button];
+    }
+    UIView *underline = [[UIView alloc] initWithFrame:CGRectMake(self.selectedDevTab * width/2, 38, width/2, 2)];
+    underline.backgroundColor = IGBlue();
+    [tabs addSubview:underline];
+    [scroll addSubview:tabs];
+    y += 40;
+    if (self.selectedDevTab == 0) {
+        UIView *heading = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
+        heading.backgroundColor = IGColor(0xFAFAFA);
+        [heading addSubview:[self label:@"DEVELOPER CONTROLS" frame:CGRectMake(16, 16, width-32, 18) size:12 color:IGMuted() bold:YES]];
+        [scroll addSubview:heading];
+        y += 42;
+
+        UIView *reelsRow = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
+        [reelsRow addSubview:[self label:@"Show Reels in Explore" frame:CGRectMake(16, 0, width-90, 54) size:15 color:IGColor(0x262626) bold:NO]];
+        UISwitch *reels = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 11, 51, 31)];
+        reels.transform = CGAffineTransformMakeScale(0.9, 0.9);
+        reels.on = [[NSUserDefaults standardUserDefaults] objectForKey:@"IGShowReels"] == nil || [[NSUserDefaults standardUserDefaults] boolForKey:@"IGShowReels"];
+        [reels addTarget:self action:@selector(toggleReels:) forControlEvents:UIControlEventValueChanged];
+        [reelsRow addSubview:reels];
+        [scroll addSubview:reelsRow];
+        y += 54;
+        [scroll addSubview:[self label:@"Shows the Reels shelf on Explore." frame:CGRectMake(16, y, width-32, 30) size:12 color:IGMuted() bold:NO]];
+        y += 38;
+
+        UIView *nullsRow = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 54)];
+        [nullsRow addSubview:[self label:@"Null demo data" frame:CGRectMake(16, 0, width-90, 54) size:15 color:IGColor(0x262626) bold:NO]];
+        UISwitch *nulls = [[UISwitch alloc] initWithFrame:CGRectMake(width-66, 11, 51, 31)];
+        nulls.transform = CGAffineTransformMakeScale(0.9, 0.9);
+        nulls.on = IGTextDemoEnabled();
+        [nulls addTarget:self action:@selector(toggleTextMode:) forControlEvents:UIControlEventValueChanged];
+        [nullsRow addSubview:nulls];
+        [scroll addSubview:nullsRow];
+        y += 54;
+        [scroll addSubview:[self label:@"Replaces account names and copy with null placeholders." frame:CGRectMake(16, y, width-32, 32) size:12 color:IGMuted() bold:NO]];
+        return y + 38;
+    }
+
+    UIView *heading = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 42)];
+    heading.backgroundColor = IGColor(0xFAFAFA);
+    [heading addSubview:[self label:@"TEST TRIGGERS" frame:CGRectMake(16, 16, width-32, 18) size:12 color:IGMuted() bold:YES]];
+    [scroll addSubview:heading];
+    y += 42;
+    NSArray *triggers = @[
+        @{ @"title": @"Send message to yourself", @"detail": @"Shows as unread until you open the chat.", @"action": @"Send", @"selector": NSStringFromSelector(@selector(triggerMessage)), @"count": @"" },
+        @{ @"title": @"Add a like", @"detail": [NSString stringWithFormat:@"Likes received: %ld", (long)IGTestEventCount(@"like")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerLike)), @"count": @"" },
+        @{ @"title": @"Add a follower", @"detail": [NSString stringWithFormat:@"Followers added: %ld", (long)IGTestEventCount(@"follow")], @"action": @"Add", @"selector": NSStringFromSelector(@selector(triggerFollower)), @"count": @"" }
+    ];
+    for (NSDictionary *trigger in triggers) {
+        UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, y, width, 66)];
+        [row addSubview:[self label:trigger[@"title"] frame:CGRectMake(16, 7, width-112, 22) size:14 color:IGColor(0x262626) bold:YES]];
+        [row addSubview:[self label:trigger[@"detail"] frame:CGRectMake(16, 31, width-112, 26) size:11 color:IGMuted() bold:NO]];
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+        button.frame = CGRectMake(width-82, 18, 68, 32);
+        [button setTitle:trigger[@"action"] forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+        [button addTarget:self action:NSSelectorFromString(trigger[@"selector"]) forControlEvents:UIControlEventTouchUpInside];
+        [row addSubview:button];
+        [scroll addSubview:row];
+        y += 66;
+        UIView *line = [[UIView alloc] initWithFrame:CGRectMake(16, y, width-16, 0.5)];
+        line.backgroundColor = IGLine();
+        [scroll addSubview:line];
+    }
+    UIButton *clear = [UIButton buttonWithType:UIButtonTypeSystem];
+    clear.frame = CGRectMake(16, y+8, width-32, 44);
+    [clear setTitle:@"Clear test events" forState:UIControlStateNormal];
+    [clear setTitleColor:IGColor(0xED4956) forState:UIControlStateNormal];
+    [clear addTarget:self action:@selector(clearTestEvents) forControlEvents:UIControlEventTouchUpInside];
+    [scroll addSubview:clear];
+    return y + 60;
 }
 - (void)toggleReels:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"IGShowReels"];
     [[NSUserDefaults standardUserDefaults] synchronize];
+    [[NSNotificationCenter defaultCenter] postNotificationName:IGSettingsDidChangeNotification object:nil];
 }
 - (void)toggleTextMode:(UISwitch *)sender {
     [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"IGTextDemoMode"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [[NSNotificationCenter defaultCenter] postNotificationName:IGTextModeDidChangeNotification object:nil];
+}
+- (void)triggerMessage {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Message yourself" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"Message"; field.autocapitalizationType = UITextAutocapitalizationTypeSentences; }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Send" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *text = alert.textFields.firstObject.text;
+        if (text.length) IGAddTestEvent(@"message", text);
+        [self renderSettings];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+- (void)triggerLike {
+    IGAddTestEvent(@"like", @"");
+    [self renderSettings];
+}
+- (void)triggerFollower {
+    IGAddTestEvent(@"follow", @"");
+    [self renderSettings];
+}
+- (void)clearTestEvents {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Clear test events?" message:@"This removes the local test messages, likes, and followers." preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Clear" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) { IGClearTestEvents(); [self renderSettings]; }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+@end
+
+@implementation IGInboxNode
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Direct";
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scroll];
+    self.inboxScroll = scroll;
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(renderInbox) name:IGTestEventsDidChangeNotification object:nil];
+    [self renderInbox];
+}
+- (void)renderInbox {
+    [self.inboxScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    CGFloat width = self.view.bounds.size.width;
+    NSArray *messages = IGSortedTestEvents(@"message");
+    if (messages.count == 0) {
+        [self.inboxScroll addSubview:[self label:@"No messages yet" frame:CGRectMake(16, 28, width-32, 24) size:14 color:IGMuted() bold:NO]];
+        self.inboxScroll.contentSize = CGSizeMake(width, 80);
+        return;
+    }
+    NSDictionary *last = messages.lastObject;
+    UIView *row = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 72)];
+    [row addSubview:IGSkeleton(CGRectMake(14, 12, 46, 46), 23)];
+    [row addSubview:[self label:@"null" frame:CGRectMake(72, 8, width-120, 22) size:14 color:UIColor.blackColor bold:YES]];
+    UILabel *preview = [self label:last[@"text"] frame:CGRectMake(72, 31, width-96, 22) size:13 color:IGMuted() bold:NO];
+    preview.lineBreakMode = NSLineBreakByTruncatingTail;
+    [row addSubview:preview];
+    if (IGUnreadMessageCount() > 0) {
+        UIView *unread = [[UIView alloc] initWithFrame:CGRectMake(width-22, 29, 8, 8)];
+        unread.backgroundColor = IGBlue();
+        unread.layer.cornerRadius = 4;
+        [row addSubview:unread];
+    }
+    [self.inboxScroll addSubview:row];
+    UIButton *tap = [UIButton buttonWithType:UIButtonTypeCustom];
+    tap.frame = row.bounds;
+    [tap addTarget:self action:@selector(openConversation) forControlEvents:UIControlEventTouchUpInside];
+    [row addSubview:tap];
+    UIView *line = [[UIView alloc] initWithFrame:CGRectMake(72, 71.5, width-72, 0.5)];
+    line.backgroundColor = IGLine();
+    [self.inboxScroll addSubview:line];
+    self.inboxScroll.contentSize = CGSizeMake(width, 72);
+}
+- (void)openConversation {
+    IGConversationNode *conversation = [IGConversationNode new];
+    conversation.title = @"null";
+    conversation.hidesBottomBarWhenPushed = YES;
+    [self.navigationController pushViewController:conversation animated:YES];
+}
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+@end
+
+@implementation IGConversationNode
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"null";
+    UIScrollView *scroll = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scroll];
+    self.conversationScroll = scroll;
+    [self renderConversation];
+}
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    IGMarkTestEventsRead(@"message");
+}
+- (void)renderConversation {
+    [self.conversationScroll.subviews makeObjectsPerformSelector:@selector(removeFromSuperview)];
+    CGFloat width = self.view.bounds.size.width;
+    CGFloat y = 16;
+    for (NSDictionary *message in IGSortedTestEvents(@"message")) {
+        NSString *text = message[@"text"] ?: @"";
+        CGFloat bubbleWidth = MIN(width-72, MAX(110, [text sizeWithAttributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15]}].width + 28));
+        CGFloat bubbleHeight = MAX(42, ceil([text boundingRectWithSize:CGSizeMake(bubbleWidth-24, CGFLOAT_MAX) options:NSStringDrawingUsesLineFragmentOrigin attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:15]} context:nil].size.height) + 20);
+        UIView *bubble = [[UIView alloc] initWithFrame:CGRectMake(16, y, bubbleWidth, bubbleHeight)];
+        bubble.backgroundColor = IGColor(0xEFEFF1);
+        bubble.layer.cornerRadius = 18;
+        UILabel *label = [self label:text frame:CGRectMake(12, 9, bubbleWidth-24, bubbleHeight-18) size:15 color:UIColor.blackColor bold:NO];
+        label.numberOfLines = 0;
+        [bubble addSubview:label];
+        [self.conversationScroll addSubview:bubble];
+        y += bubbleHeight + 10;
+    }
+    self.conversationScroll.contentSize = CGSizeMake(width, y+16);
 }
 @end
 
@@ -741,9 +1064,20 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
 }
 @end
 
+@interface IGApplicationController () <UITabBarControllerDelegate, UINavigationControllerDelegate>
+@property (nonatomic, strong) UIView *footerView;
+@property (nonatomic, strong) NSMutableArray *footerButtons;
+@property (nonatomic, strong) NSMutableArray *footerImageViews;
+@property (nonatomic, strong) UIView *activityDot;
+- (void)selectFooterTab:(UIButton *)sender;
+- (void)updateFooterIcons;
+- (void)updateFooterVisibility;
+@end
+
 @implementation IGApplicationController
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.delegate = (id<UITabBarControllerDelegate>)self;
     self.viewControllers = @[
         [self nav:[IGFeedNode new] title:@"Home" icon:@"home"],
         [self nav:[IGExploreNode new] title:@"Search" icon:@"search"],
@@ -752,26 +1086,108 @@ static UIImageView *IGIconView(NSString *name, CGRect frame, UIColor *color, BOO
         [self nav:[IGProfileNode new] title:@"Profile" icon:@"profile"]
     ];
     self.selectedIndex = 0;
-    self.tabBar.tintColor = UIColor.blackColor;
-    self.tabBar.barTintColor = [UIColor colorWithWhite:1.0 alpha:0.86];
-    self.tabBar.translucent = YES;
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(routeToComments) name:@"IGOpenComments" object:nil];
+    self.tabBar.hidden = YES;
+    self.footerView = [[UIView alloc] initWithFrame:CGRectZero];
+    self.footerView.clipsToBounds = NO;
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleLight]];
+    blur.frame = self.footerView.bounds;
+    blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.footerView addSubview:blur];
+    UIView *wash = [[UIView alloc] initWithFrame:self.footerView.bounds];
+    wash.backgroundColor = [UIColor colorWithWhite:1 alpha:0.62];
+    wash.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.footerView addSubview:wash];
+    UIView *topLine = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 0.5)];
+    topLine.backgroundColor = IGLine();
+    topLine.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.footerView addSubview:topLine];
+    self.footerButtons = [NSMutableArray array];
+    self.footerImageViews = [NSMutableArray array];
+    NSArray *names = @[@"tab-home", @"tab-search", @"tab-camera", @"tab-heart", @"tab-profile"];
+    NSArray *labels = @[@"Home", @"Search", @"Camera", @"Activity", @"Profile"];
+    for (NSInteger i = 0; i < names.count; i++) {
+        UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.tag = i;
+        button.accessibilityLabel = labels[i];
+        [button addTarget:self action:@selector(selectFooterTab:) forControlEvents:UIControlEventTouchUpInside];
+        [self.footerView addSubview:button];
+        [self.footerButtons addObject:button];
+        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectZero];
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        icon.userInteractionEnabled = NO;
+        [button addSubview:icon];
+        [self.footerImageViews addObject:icon];
+    }
+    self.activityDot = [[UIView alloc] initWithFrame:CGRectZero];
+    self.activityDot.backgroundColor = IGColor(0xED4956);
+    self.activityDot.layer.cornerRadius = 2.5;
+    self.activityDot.userInteractionEnabled = NO;
+    [self.footerView addSubview:self.activityDot];
+    [self.view addSubview:self.footerView];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(updateFooterIcons) name:IGTestEventsDidChangeNotification object:nil];
+    [self updateFooterIcons];
+    [self updateFooterVisibility];
+}
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat width = self.view.bounds.size.width;
+    CGFloat height = 49;
+    self.footerView.frame = CGRectMake(0, self.view.bounds.size.height-height, width, height);
+    CGFloat itemWidth = width/5.0;
+    for (NSInteger i = 0; i < self.footerButtons.count; i++) {
+        UIButton *button = self.footerButtons[i];
+        button.frame = CGRectMake(i*itemWidth, 0, itemWidth, height);
+        UIImageView *icon = self.footerImageViews[i];
+        icon.frame = CGRectMake((itemWidth-24)/2.0, 10.5, 24, 24);
+    }
+    self.activityDot.frame = CGRectMake(3*itemWidth + (itemWidth-5)/2.0, 39, 5, 5);
+    [self updateFooterVisibility];
+}
+- (void)selectFooterTab:(UIButton *)sender {
+    self.selectedIndex = sender.tag;
+    [self updateFooterIcons];
+    [self updateFooterVisibility];
+    if (sender.tag == 3) IGMarkTestEventsRead(@"activity");
+}
+- (void)updateFooterIcons {
+    NSArray *names = @[@"tab-home", @"tab-search", @"tab-camera", @"tab-heart", @"tab-profile"];
+    for (NSInteger i = 0; i < self.footerImageViews.count; i++) {
+        UIImageView *icon = self.footerImageViews[i];
+        UIColor *color = i == self.selectedIndex ? UIColor.blackColor : IGMuted();
+        icon.image = IGIconImage(names[i], color, 24, i == self.selectedIndex);
+    }
+    self.activityDot.hidden = IGUnreadLikeCount() == 0;
+}
+- (void)updateFooterVisibility {
+    UINavigationController *navigation = (UINavigationController *)self.selectedViewController;
+    self.footerView.hidden = [navigation isKindOfClass:[UINavigationController class]] && navigation.topViewController.hidesBottomBarWhenPushed;
 }
 - (UINavigationController *)nav:(UIViewController *)root title:(NSString *)title icon:(NSString *)icon {
     root.title = title;
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:root];
+    navigation.delegate = self;
     navigation.tabBarItem.title = @"";
     NSString *tabIcon = [@"tab-" stringByAppendingString:icon];
     navigation.tabBarItem.image = IGIconImage(tabIcon, IGMuted(), 24, NO);
     navigation.tabBarItem.selectedImage = IGIconImage(tabIcon, UIColor.blackColor, 24, YES);
     return navigation;
 }
+- (void)tabBarController:(UITabBarController *)tabBarController didSelectViewController:(UIViewController *)viewController {
+    [self updateFooterIcons];
+    [self updateFooterVisibility];
+    if ([viewController isEqual:self.viewControllers[3]]) IGMarkTestEventsRead(@"activity");
+}
+- (void)navigationController:(UINavigationController *)navigationController didShowViewController:(UIViewController *)viewController animated:(BOOL)animated {
+    if (navigationController == self.selectedViewController) [self updateFooterVisibility];
+}
 - (void)routeToComments {
     UINavigationController *navigation = (UINavigationController *)self.selectedViewController;
     if (![navigation.topViewController isKindOfClass:[IGCommentsNode class]]) {
         IGCommentsNode *comments = [IGCommentsNode new];
         comments.title = @"Comments";
+        comments.hidesBottomBarWhenPushed = YES;
         [navigation pushViewController:comments animated:YES];
     }
 }
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
 @end
